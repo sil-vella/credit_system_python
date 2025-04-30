@@ -1,6 +1,10 @@
+version: "3.9"
+
 secrets:
-  postgres_password:
-    file: ./secrets/postgres_password
+  mongodb_root_password:
+    file: ./secrets/mongodb_root_password
+  mongodb_user_password:
+    file: ./secrets/mongodb_user_password
   app_secret_key:
     file: ./secrets/app_secret_key
   jwt_secret_key:
@@ -21,17 +25,16 @@ services:
     container_name: ${FLASK_SERVICE_NAME}
     environment:
       - PYTHONPATH=${PYTHONPATH}
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_HOST=${POSTGRES_HOST}
-      - DB_HOST=${DB_HOST}
+      - MONGODB_URI=mongodb://${MONGODB_USER}:${MONGODB_PASSWORD}@mongodb:27017/${MONGODB_DB_NAME}?authSource=admin
+      - MONGODB_DB_NAME=${MONGODB_DB_NAME}
+      - MONGODB_USER=${MONGODB_USER}
+      - MONGODB_PASSWORD_FILE=/run/secrets/mongodb_user_password
       - REDIS_HOST=${REDIS_HOST}
       - REDIS_PORT=${REDIS_PORT}
       - REDIS_PASSWORD_FILE=/run/secrets/redis_password
       - APP_SECRET_KEY_FILE=/run/secrets/app_secret_key
       - JWT_SECRET_KEY_FILE=/run/secrets/jwt_secret_key
       - ENCRYPTION_KEY_FILE=/run/secrets/encryption_key
-      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
       - STRIPE_SECRET_KEY_FILE=/run/secrets/stripe_secret_key
     ports:
       - "${FLASK_PORT}:${FLASK_PORT}"
@@ -42,7 +45,7 @@ services:
       - ./tools:/app/tools
       - ./utils:/app/utils
     secrets:
-      - postgres_password
+      - mongodb_user_password
       - app_secret_key
       - jwt_secret_key
       - encryption_key
@@ -51,7 +54,7 @@ services:
     depends_on:
       init-secrets:
         condition: service_completed_successfully
-      db:
+      mongodb:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -78,39 +81,39 @@ services:
         [ ! -f /secrets/app_secret_key ] && head -c32 /dev/urandom | xxd -p > /secrets/app_secret_key;
         [ ! -f /secrets/jwt_secret_key ] && head -c32 /dev/urandom | xxd -p > /secrets/jwt_secret_key;
         [ ! -f /secrets/encryption_key ] && head -c32 /dev/urandom | xxd -p > /secrets/encryption_key;
-        [ ! -f /secrets/postgres_password ] && head -c32 /dev/urandom | xxd -p > /secrets/postgres_password;
+        [ ! -f /secrets/mongodb_root_password ] && head -c32 /dev/urandom | xxd -p > /secrets/mongodb_root_password;
+        [ ! -f /secrets/mongodb_user_password ] && head -c32 /dev/urandom | xxd -p > /secrets/mongodb_user_password;
         [ ! -f /secrets/redis_password ] && head -c32 /dev/urandom | xxd -p > /secrets/redis_password;
         chmod 400 /secrets/*
       "
 
-  db:
-    image: postgres:latest
-    container_name: ${POSTGRES_SERVICE_NAME}
+  mongodb:
+    image: mongo:latest
+    container_name: ${MONGODB_SERVICE_NAME}
     environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+      - MONGO_INITDB_ROOT_USERNAME=${MONGODB_ROOT_USER}
+      - MONGO_INITDB_ROOT_PASSWORD_FILE=/run/secrets/mongodb_root_password
+      - MONGO_INITDB_DATABASE=${MONGODB_DB_NAME}
     volumes:
-      - ./db_data:/var/lib/postgresql/data
-      - ./init-scripts:/docker-entrypoint-initdb.d
-      - ./init-scripts/pg_hba.conf:/var/lib/postgresql/data/pg_hba.conf  # Add this
+      - cr_credit_system_mongodb_data:/data/db
+      - ./init-scripts/mongodb-init.js:/docker-entrypoint-initdb.d/mongodb-init.js:ro
     secrets:
-      - postgres_password
+      - mongodb_root_password
     networks:
       - cr_credit_system_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 5s
+      timeout: 5s
       retries: 5
       start_period: 10s
-    command: >
-      postgres -c hba_file=/var/lib/postgresql/data/pg_hba.conf
+    restart: unless-stopped
 
   redis:
     image: redis:latest
     container_name: ${REDIS_SERVICE_NAME}
     volumes:
-      - ./redis_data:/data
+      - cr_credit_system_redis_data:/data
       - ./redis.conf:/usr/local/etc/redis/redis.conf.template:ro
     secrets:
       - redis_password
@@ -134,12 +137,11 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
-      - "8080:80"  # Expose NGINX on port 8080 of your host machine
+      - "8080:80"
     depends_on:
       - flask_app
     networks:
       - cr_credit_system_network
-
 
 networks:
   cr_credit_system_network:
@@ -149,3 +151,7 @@ networks:
 volumes:
   app_secrets:
     driver: local
+  cr_credit_system_redis_data:
+    name: cr_credit_system_redis_data
+  cr_credit_system_mongodb_data:
+    name: cr_credit_system_mongodb_data

@@ -1,12 +1,10 @@
-import psycopg2
-import psycopg2.extras
-import psycopg2.pool
 import os
 import json
 from tools.logger.custom_logging import custom_log, log_function_call
 from utils.config.config import Config
 from core.managers.redis_manager import RedisManager
 from core.managers.jwt_manager import JWTManager, TokenType
+from core.managers.database_manager import DatabaseManager
 from tools.error_handling import ErrorHandler
 from datetime import datetime, timedelta
 import time
@@ -21,7 +19,12 @@ class ConnectionAPI:
         self.registered_routes = []
         self.app = None  # Reference to Flask app
         self.app_manager = app_manager  # Reference to AppManager if provided
-        self.connection_pool = self._create_connection_pool()  # Initialize PostgreSQL connection pool
+        
+        # Initialize database managers with different roles
+        self.db_manager = DatabaseManager(role="read_write")  # For write operations
+        self.analytics_db = DatabaseManager(role="read_only")  # For read operations
+        self.admin_db = DatabaseManager(role="admin")  # For administrative tasks
+        
         self.redis_manager = RedisManager()  # Initialize Redis manager
         self.jwt_manager = JWTManager()  # Initialize JWT manager
         self.error_handler = ErrorHandler()  # Initialize error handler
@@ -32,7 +35,7 @@ class ConnectionAPI:
         self.max_concurrent_sessions = 1  # Only one session allowed per user
         self.session_check_interval = 300  # 5 minutes in seconds
 
-        # ✅ Ensure tables exist in the database
+        # ✅ Ensure collections exist in the database
         self.initialize_database()
 
     def initialize(self, app):
@@ -44,409 +47,136 @@ class ConnectionAPI:
         # Register the refresh token endpoint
         self.register_route("/auth/refresh", self.refresh_token_endpoint, methods=["POST"])
 
-    def _create_connection_pool(self):
-        """Create a PostgreSQL connection pool with security features."""
+    def initialize_database(self):
+        """Ensure required collections exist in the database."""
+        custom_log("⚙️ Initializing database collections...")
+        self._create_users_collection()
+        custom_log("✅ Database collections verified.")
+
+    def _create_users_collection(self):
+        """Create users collection with proper indexes."""
         try:
-            # Get database credentials from environment
-            db_host = os.getenv("POSTGRES_HOST", "localhost")
-            db_port = os.getenv("POSTGRES_PORT", "5432")
-            db_name = os.getenv("POSTGRES_DB", "postgres")
-            db_user = os.getenv("POSTGRES_USER", "postgres")
-            
-            # Get password from file or environment variable
-            password_file = os.getenv("POSTGRES_PASSWORD_FILE")
-            if password_file and os.path.exists(password_file):
-                with open(password_file, 'r') as f:
-                    db_password = f.read().strip()
-            else:
-                db_password = os.getenv("POSTGRES_PASSWORD")
-            
-            if not db_password:
-                raise ValueError("Database password not found in file or environment variable")
-
-            # Connection parameters with security features
-            connection_params = {
-                "host": db_host,
-                "port": db_port,
-                "database": db_name,
-                "user": db_user,
-                "password": db_password,
-                "connect_timeout": Config.DB_CONNECT_TIMEOUT,
-                "keepalives": Config.DB_KEEPALIVES,
-                "keepalives_idle": Config.DB_KEEPALIVES_IDLE,
-                "keepalives_interval": Config.DB_KEEPALIVES_INTERVAL,
-                "keepalives_count": Config.DB_KEEPALIVES_COUNT,
-                "application_name": "cr_credit_system"
-            }
-
-            # Add SSL if enabled
-            if Config.USE_SSL:
-                connection_params["sslmode"] = "require"
-
-            # Create connection pool with security features
-            pool = psycopg2.pool.SimpleConnectionPool(
-                minconn=Config.DB_POOL_MIN_CONN,
-                maxconn=Config.DB_POOL_MAX_CONN,
-                **connection_params
-            )
-
-            # Test the pool with a health check
-            with pool.getconn() as conn:
-                with conn.cursor() as cur:
-                    # Set statement timeout for this connection
-                    cur.execute(f"SET statement_timeout = {Config.DB_STATEMENT_TIMEOUT}")
-                    cur.execute("SELECT 1")
-                    result = cur.fetchone()
-                    if not result or result[0] != 1:
-                        raise RuntimeError("Health check failed")
-
-            custom_log(f"✅ Database connection pool created successfully with security features. Pool size: {Config.DB_POOL_MIN_CONN}-{Config.DB_POOL_MAX_CONN}")
-            return pool
-
+            # Create users collection with indexes
+            self.admin_db.db.users.create_index("email", unique=True)
+            self.admin_db.db.users.create_index("username")
+            self.admin_db.db.users.create_index("created_at")
+            custom_log("✅ Users collection and indexes created")
         except Exception as e:
-            custom_log(f"❌ Error creating connection pool: {e}")
-            raise RuntimeError(f"Failed to create database connection pool: {str(e)}")
+            custom_log(f"❌ Error creating users collection: {e}")
+            raise
 
-    def get_connection(self):
-        """Get a connection from the pool with retry logic and state tracking."""
-        retry_count = 0
-        last_error = None
+    def get_user_by_email(self, email):
+        """Get user by email with proper error handling."""
+        try:
+            return self.analytics_db.find_one("users", {"email": email})
+        except Exception as e:
+            self.logger.error(f"Error getting user by email: {e}")
+            return None
 
-        while retry_count < Config.DB_RETRY_COUNT:
-            try:
-                # Check if pool exists, if not create it
-                if not self.connection_pool:
-                    self.connection_pool = self._create_connection_pool()
+    def create_user(self, username, email, hashed_password):
+        """Create a new user with proper error handling."""
+        try:
+            user_data = {
+                "username": username,
+                "email": email,
+                "password": hashed_password,
+                "created_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow()
+            }
+            user_id = self.db_manager.insert("users", user_data)
+            return self.get_user_by_email(email)
+        except Exception as e:
+            self.logger.error(f"Error creating user: {e}")
+            raise
 
-                # Get connection from pool with timeout
-                conn = self.connection_pool.getconn()
-                if not conn:
-                    raise RuntimeError("Failed to get connection from pool")
-
-                # Set statement timeout for this connection
-                with conn.cursor() as cur:
-                    cur.execute(f"SET statement_timeout = {Config.DB_STATEMENT_TIMEOUT}")
-
-                # Track connection state in Redis
-                connection_id = id(conn)
-                connection_state = {
-                    "created_at": time.time(),
-                    "status": "active",
-                    "statement_timeout": Config.DB_STATEMENT_TIMEOUT,
-                    "last_used": time.time()
-                }
-                
-                # Cache connection state with expiration
-                self.redis_manager.set(
-                    f"connection:{connection_id}",
-                    connection_state,
-                    expire=Config.DB_KEEPALIVES_IDLE * 2
-                )
-
-                custom_log(f"✅ Got connection from pool (ID: {connection_id})")
-                return conn
-
-            except (psycopg2.OperationalError, RuntimeError) as e:
-                last_error = e
-                retry_count += 1
-                custom_log(f"Connection attempt {retry_count} failed: {str(e)}")
-                
-                if retry_count < Config.DB_RETRY_COUNT:
-                    time.sleep(Config.DB_RETRY_DELAY)
-                    continue
-                
-                # If we've exhausted retries, try to recreate the pool
-                custom_log("Max retries reached, attempting to recreate connection pool")
-                self.connection_pool = self._create_connection_pool()
-                retry_count = 0  # Reset retry count after pool recreation
-                time.sleep(Config.DB_RETRY_DELAY)
-
+    def delete_user(self, user_id):
+        """Delete a user and all associated data with proper error handling."""
+        try:
+            # Delete user data from all collections
+            self.db_manager.delete("users", {"_id": user_id})
+            self.db_manager.delete("user_sessions", {"user_id": user_id})
+            self.db_manager.delete("user_tokens", {"user_id": user_id})
+            
+            # Invalidate any cached user data
+            self._invalidate_caches(f"user:{user_id}")
+            custom_log(f"✅ User {user_id} and associated data deleted")
             except Exception as e:
-                custom_log(f"Unexpected error getting connection: {str(e)}")
+            self.logger.error(f"Error deleting user: {e}")
                 raise
 
-        # If we get here, all retries failed
-        raise RuntimeError(f"Failed to get connection after {Config.DB_RETRY_COUNT} attempts. Last error: {str(last_error)}")
-
-    def return_connection(self, connection):
-        """Return a connection to the pool and update Redis cache."""
-        if self.connection_pool is not None and connection is not None:
-            try:
-                conn_id = id(connection)
-                # Update connection state in Redis
-                self.redis_manager.set(
-                    f"connection:{conn_id}",
-                    {
-                        "status": "returned",
-                        "returned_at": str(datetime.now().isoformat())
-                    },
-                    expire=Config.DB_KEEPALIVES_IDLE * 2
-                )
-                
-                self.connection_pool.putconn(connection)
-                custom_log(f"✅ Returned connection to pool (ID: {conn_id})")
-            except Exception as e:
-                custom_log(f"❌ Error returning connection to pool: {e}")
-
-    def fetch_from_db(self, query, params=None, as_dict=False):
-        """Execute a SELECT query and cache results in Redis."""
-        connection = None
+    def fetch_from_db(self, collection, query, as_dict=False):
+        """Execute a query and cache results in Redis."""
         try:
-            # Validate query type and format
-            if not query or not isinstance(query, str):
+            # Validate query
+            if not query or not isinstance(query, dict):
                 raise ValueError("Invalid query format")
                 
-            # Validate query is SELECT
-            if not query.strip().upper().startswith('SELECT'):
-                raise ValueError("Only SELECT queries are allowed in fetch_from_db")
-                
-            # Validate parameters
-            if params is not None:
-                if not isinstance(params, (tuple, list)):
-                    raise ValueError("Parameters must be a tuple or list")
-                if any(not isinstance(p, (str, int, float, bool, type(None))) for p in params):
-                    raise ValueError("Invalid parameter types")
-
-            # Validate query size
-            if not self.error_handler.validate_query_size(query, params):
-                error_response = self.error_handler.handle_validation_error(
-                    ValueError("Query size exceeds maximum allowed size")
-                )
-                raise ValueError(error_response["error"])
-
-            connection = self.get_connection()
-            cursor = connection.cursor(cursor_factory=psycopg2.extras.DictCursor if as_dict else None)
-            
-            # Create cache key based on query and parameters
-            cache_key = f"query:{hash(query + str(params or ()))}"
+            # Create cache key based on query
+            cache_key = f"query:{hash(str(query))}"
             
             # Try to get from Redis cache first
             try:
                 cached_result = self.redis_manager.get(cache_key)
                 if cached_result:
                     custom_log(f"✅ Retrieved query result from Redis cache")
-                    # Convert list of lists back to list of tuples for non-dict results
-                    if not as_dict:
-                        cached_result = [tuple(row) for row in cached_result]
                     return cached_result
             except Exception as e:
-                error_response = self.error_handler.handle_redis_error(e, "cache_get")
-                custom_log(f"⚠️ Cache retrieval failed: {error_response['error']}")
+                self.logger.warning(f"Cache retrieval failed: {e}")
             
-            cursor.execute(query, params or ())
-            result = cursor.fetchall()
-            cursor.close()
-            
-            # Convert to dict if requested
-            if as_dict:
-                processed_result = [dict(row) for row in result]
-            else:
-                processed_result = [tuple(row) for row in result]
-            
-            # Validate result size before caching
-            MAX_RESULT_SIZE = 1024 * 1024  # 1MB
-            result_size = len(json.dumps(processed_result))
-            if result_size > MAX_RESULT_SIZE:
-                custom_log("⚠️ Query result too large for caching")
-                return processed_result
+            # Execute query
+            result = self.analytics_db.find(collection, query)
             
             # Cache the result
             try:
-                self.redis_manager.set(cache_key, processed_result, expire=300)  # Cache for 5 minutes
+                self.redis_manager.set(cache_key, result, expire=300)  # Cache for 5 minutes
                 custom_log(f"✅ Cached query result in Redis")
             except Exception as e:
-                error_response = self.error_handler.handle_redis_error(e, "cache_set")
-                custom_log(f"⚠️ Cache storage failed: {error_response['error']}")
+                self.logger.warning(f"Cache storage failed: {e}")
             
-            return processed_result
+            return result
             
         except Exception as e:
-            error_response = self.error_handler.handle_database_error(e, "fetch_from_db")
-            custom_log(f"❌ Error executing query: {error_response['error']}")
-            raise ValueError(error_response["error"])
-        finally:
-            if connection:
-                self.return_connection(connection)
+            self.logger.error(f"Error executing query: {e}")
+            raise
 
-    def execute_query(self, query, params=None):
-        """Execute a non-SELECT query and invalidate relevant caches."""
-        connection = None
+    def execute_query(self, collection, query, data=None):
+        """Execute a write operation and invalidate relevant caches."""
         try:
-            # Validate query size
-            if not self.error_handler.validate_query_size(query, params):
-                error_response = self.error_handler.handle_validation_error(
-                    ValueError("Query size exceeds maximum allowed size")
-                )
-                raise ValueError(error_response["error"])
-
-            connection = self.get_connection()
-            cursor = connection.cursor()
-            cursor.execute(query, params or ())
-            connection.commit()
-            cursor.close()
+            if data:
+                # Update operation
+                result = self.db_manager.update(collection, query, data)
+            else:
+                # Delete operation
+                result = self.db_manager.delete(collection, query)
             
             # Invalidate relevant caches
-            self._invalidate_caches(query)
+            self._invalidate_caches(collection)
+            
+            return result
             
         except Exception as e:
-            if connection:
-                connection.rollback()
-            error_response = self.error_handler.handle_database_error(e, "execute_query")
-            custom_log(f"❌ Error executing query: {error_response['error']}")
-            raise ValueError(error_response["error"])
-        finally:
-            if connection:
-                self.return_connection(connection)
+            self.logger.error(f"Error executing query: {e}")
+            raise
 
-    def initialize_database(self):
-        """Ensure required tables exist in the database."""
-        custom_log("⚙️ Initializing database tables...")
-        self._create_users_table()
-        custom_log("✅ Database tables verified.")
-
-    def _create_users_table(self):
-        """Create users table with proper constraints and indexes."""
-        query = """
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            username VARCHAR(255) NOT NULL,
-            email VARCHAR(255) UNIQUE NOT NULL,
-            password VARCHAR(255) NOT NULL,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-        """
-        self.execute_query(query)
-
-    def get_user_by_email(self, email):
-        """Get user by email with proper error handling."""
-        query = "SELECT id, username, password, email FROM users WHERE email = %s;"
-        return self.fetch_from_db(query, (email,), as_dict=True)
-
-    def create_user(self, username, email, hashed_password):
-        """Create a new user with proper error handling."""
-        query = "INSERT INTO users (username, email, password) VALUES (%s, %s, %s);"
-        self.execute_query(query, (username, email, hashed_password))
-        return self.get_user_by_email(email)
-
-    def delete_user(self, user_id):
-        """Delete a user and all associated data with proper error handling."""
-        # Delete guessed names
-        self.execute_query("DELETE FROM guessed_names WHERE user_id = %s", (user_id,))
-        # Delete user progress
-        self.execute_query("DELETE FROM user_category_progress WHERE user_id = %s", (user_id,))
-        # Delete the user
-        self.execute_query("DELETE FROM users WHERE id = %s", (user_id,))
-        # Invalidate any cached user data
-        self._invalidate_caches(f"user:{user_id}")
-
-    def register_route(self, path, view_func, methods=None, endpoint=None):
-        """Register a route with the Flask app."""
-        if self.app is None:
-            raise RuntimeError("ConnectionAPI must be initialized with a Flask app before registering routes.")
-
-        methods = methods or ["GET"]
-        endpoint = endpoint or view_func.__name__
-
-        self.app.add_url_rule(path, endpoint=endpoint, view_func=view_func, methods=methods)
-        self.registered_routes.append((path, methods))
-        custom_log(f"🌐 Route registered: {path} [{', '.join(methods)}] as '{endpoint}'")
-
-    def dispose(self):
-        """Clean up registered routes and resources."""
-        custom_log("🔄 Disposing ConnectionAPI...")
-        self.registered_routes.clear()
-        if self.connection_pool:
-            self.connection_pool.closeall()
-            custom_log("🔌 Database connection pool closed.")
-        if self.redis_manager:
-            self.redis_manager.dispose()
-            custom_log("🔌 Redis connections closed.")
-
-    def cache_user_data(self, user_id, data):
-        """Cache user data in Redis with encryption."""
-        # Validate user_id
-        if not isinstance(user_id, (int, str)) or not str(user_id).isdigit():
-            raise ValueError("Invalid user_id")
-        
-        # Validate data structure
-        if not isinstance(data, dict):
-            raise ValueError("Data must be a dictionary")
-        
-        # Validate required fields
-        required_fields = ['id', 'username', 'email']
-        if not all(field in data for field in required_fields):
-            raise ValueError("Missing required user data fields")
-
-        # Normalize ID before proceeding
-        data["id"] = int(data["id"])
-
-        # Validate data size
-        data_size = len(json.dumps(data))
-        if data_size > 1024 * 1024:  # 1MB limit
-            raise ValueError("User data too large for caching")
-        
-        # Validate data types
-        if not isinstance(data['id'], (int, str)) or not str(data['id']).isdigit():
-            raise ValueError("Invalid user ID in data")
-        if not isinstance(data['username'], str) or len(data['username']) > 50:
-            raise ValueError("Invalid username format")
-        if not isinstance(data['email'], str) or '@' not in data['email']:
-            raise ValueError("Invalid email format")
-        
-        self.redis_manager.set(f"user:{user_id}", data, expire=3600)  # Cache for 1 hour
-
-    def get_cached_user_data(self, user_id):
-        """Get cached user data from Redis with decryption."""
-        # Validate user_id
-        if not isinstance(user_id, (int, str)) or not str(user_id).isdigit():
-            raise ValueError("Invalid user_id")
-        
-        # Get cached data
-        data = self.redis_manager.get(f"user:{user_id}")
-        
-        # Validate cached data structure
-        if data:
-            if not isinstance(data, dict):
-                self.redis_manager.delete(f"user:{user_id}")  # Clear invalid data
-                return None
-                
-            required_fields = ['id', 'username', 'email']
-            if not all(field in data for field in required_fields):
-                self.redis_manager.delete(f"user:{user_id}")
-                return None
-                
-            if not isinstance(data['id'], (int, str)) or not str(data['id']).isdigit():
-                self.redis_manager.delete(f"user:{user_id}")
-                return None
-
-            # 🔧 Normalize user ID
-            data["id"] = int(data["id"])
-
-        return data
-
-    @property
-    def redis(self):
-        """Access Redis manager methods directly."""
-        return self.redis_manager
-
-    def _invalidate_caches(self, query):
-        """Invalidate relevant Redis caches based on the query."""
-        query = query.lower()
-        
-        # Invalidate query cache
-        cache_key = f"query:{hash(query)}"
-        self.redis_manager.delete(cache_key)
-        
-        # Invalidate user data cache if user-related query
-        if "users" in query:
-            pattern = "user:*"
+    def _invalidate_caches(self, collection):
+        """Invalidate relevant Redis caches based on the collection."""
+        try:
+            # Invalidate collection-specific caches
+            pattern = f"query:*{collection}*"
+            keys = self.redis_manager.redis.keys(pattern)
+            for key in keys:
+                self.redis_manager.delete(key)
+            
+            # Invalidate user data cache if users collection
+            if collection == "users":
+                pattern = "user:*"
             keys = self.redis_manager.redis.keys(pattern)
             for key in keys:
                 self.redis_manager.delete(key)
         
         custom_log("✅ Relevant caches invalidated")
+        except Exception as e:
+            self.logger.error(f"Error invalidating caches: {e}")
 
     def _create_session(self, user_id: int, username: str, email: str) -> dict:
         """Create a new session for a user."""
@@ -459,99 +189,48 @@ class ConnectionAPI:
                 'user_id': user_id,
                 'username': username,
                 'email': email,
-                'created_at': datetime.utcnow().isoformat(),
-                'last_active': datetime.utcnow().isoformat()
+                'created_at': datetime.utcnow(),
+                'last_active': datetime.utcnow()
             }
             
-            # Store session data in Redis
-            self.redis_manager.set(f"session:{session_id}", json.dumps(session_data), expire=3600)  # 1 hour expiration
+            # Store session in database
+            self.db_manager.insert("user_sessions", session_data)
             
-            # Add session to user's active sessions list
-            user_sessions_key = f"user_sessions:{user_id}"
-            current_sessions = self.redis_manager.get(user_sessions_key) or []
-            if not isinstance(current_sessions, list):
-                current_sessions = []
-            
-            # Add new session to list
-            current_sessions.append(session_id)
-            
-            # Enforce maximum concurrent sessions (e.g., 3)
-            max_sessions = 3
-            while len(current_sessions) > max_sessions:
-                old_session = current_sessions.pop(0)
-                self.redis_manager.delete(f"session:{old_session}")
-            
-            # Store updated sessions list
-            self.redis_manager.set(user_sessions_key, current_sessions, expire=3600)
+            # Store session in Redis for quick access
+            self.redis_manager.set(f"session:{session_id}", json.dumps(session_data), expire=3600)
             
             self.logger.info(f"Created new session {session_id} for user {username}")
             return {'session_id': session_id, **session_data}
             
         except Exception as e:
-            self.logger.error(f"Error creating session: {str(e)}")
+            self.logger.error(f"Error creating session: {e}")
             raise
 
     def _remove_session(self, session_id: str, user_id: int) -> bool:
-        """Remove a session and update user's active sessions list."""
+        """Remove a session from both database and cache."""
         try:
-            # Remove session data
+            # Remove from database
+            self.db_manager.delete("user_sessions", {"session_id": session_id})
+            
+            # Remove from Redis
             self.redis_manager.delete(f"session:{session_id}")
-            
-            # Remove session from user's active sessions list
-            user_sessions_key = f"user_sessions:{user_id}"
-            current_sessions = self.redis_manager.get(user_sessions_key) or []
-            if not isinstance(current_sessions, list):
-                current_sessions = []
-            
-            # Remove session from list
-            current_sessions = [s for s in current_sessions if s != session_id]
-            
-            # Update sessions list
-            if current_sessions:
-                self.redis_manager.set(user_sessions_key, current_sessions, expire=3600)
-            else:
-                self.redis_manager.delete(user_sessions_key)
             
             self.logger.info(f"Removed session {session_id} for user {user_id}")
             return True
             
         except Exception as e:
-            self.logger.error(f"Error removing session: {str(e)}")
+            self.logger.error(f"Error removing session: {e}")
             return False
             
     def check_active_sessions(self, user_id: int) -> bool:
         """Check if a user has any active sessions."""
         try:
-            # Get all sessions for the user
-            user_sessions_key = f"user_sessions:{user_id}"
-            sessions = self.redis_manager.get(user_sessions_key) or []
-            if not isinstance(sessions, list):
-                sessions = []
-            
-            if not sessions:
-                return False
-            
-            # Check each session's validity
-            valid_sessions = []
-            for session_id in sessions:
-                session_data = self.redis_manager.get(f"session:{session_id}")
-                if session_data:
-                    valid_sessions.append(session_id)
-                else:
-                    # Remove invalid session from list
-                    sessions.remove(session_id)
-            
-            # Update user's active sessions list with only valid sessions
-            if len(valid_sessions) != len(sessions):
-                if valid_sessions:
-                    self.redis_manager.set(user_sessions_key, valid_sessions, expire=3600)
-                else:
-                    self.redis_manager.delete(user_sessions_key)
-            
-            return len(valid_sessions) > 0
+            # Check database for active sessions
+            sessions = self.analytics_db.find("user_sessions", {"user_id": user_id})
+            return len(sessions) > 0
             
         except Exception as e:
-            self.logger.error(f"Error checking active sessions: {str(e)}")
+            self.logger.error(f"Error checking active sessions: {e}")
             return False
 
     def refresh_token_endpoint(self):
@@ -570,50 +249,56 @@ class ConnectionAPI:
             return result, 200
             
         except Exception as e:
-            self.logger.error(f"Error in refresh token endpoint: {str(e)}")
+            self.logger.error(f"Error in refresh token endpoint: {e}")
             return {"error": "Internal server error"}, 500
 
     def create_user_tokens(self, user_data):
         """Create access and refresh tokens for a user."""
         try:
-            custom_log(f"🔐 Starting token creation for user ID: {user_data['id']}")
+            custom_log(f"🔐 Starting token creation for user ID: {user_data['_id']}")
             
             # Create access token
-            custom_log("🔑 Creating access token...")
             access_token = self.jwt_manager.create_token(
                 user_data,
                 TokenType.ACCESS,
-                expires_in=3600  # 1 hour in seconds
+                expires_in=3600  # 1 hour
             )
-            custom_log("✅ Access token created successfully")
 
             # Create refresh token
-            custom_log("🔑 Creating refresh token...")
             refresh_token = self.jwt_manager.create_token(
                 user_data,
                 TokenType.REFRESH,
-                expires_in=604800  # 7 days in seconds
+                expires_in=604800  # 7 days
             )
-            custom_log("✅ Refresh token created successfully")
 
-            # Store tokens in Redis
-            custom_log("💾 Storing tokens in Redis...")
+            # Store tokens in database
+            token_data = {
+                "user_id": user_data["_id"],
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "created_at": datetime.utcnow(),
+                "expires_at": datetime.utcnow() + timedelta(days=7)
+            }
+            self.db_manager.insert("user_tokens", token_data)
+
+            # Store tokens in Redis for quick access
             self.redis_manager.set(
-                f"access_token:{user_data['id']}",
+                f"access_token:{user_data['_id']}",
                 access_token,
-                expire=3600  # 1 hour
+                expire=3600
             )
             self.redis_manager.set(
-                f"refresh_token:{user_data['id']}",
+                f"refresh_token:{user_data['_id']}",
                 refresh_token,
-                expire=604800  # 7 days
+                expire=604800
             )
-            custom_log("✅ Tokens stored in Redis successfully")
 
             # Create session
-            custom_log("🔄 Creating user session...")
-            session_data = self._create_session(user_data['id'], user_data['username'], user_data['email'])
-            custom_log(f"✅ Session created with ID: {session_data['session_id']}")
+            session_data = self._create_session(
+                user_data['_id'],
+                user_data['username'],
+                user_data['email']
+            )
 
             return {
                 "access_token": access_token,
@@ -643,9 +328,9 @@ class ConnectionAPI:
                 return {"error": "Invalid refresh token"}, 401
 
             # Get user from database
-            user = self.fetch_from_db(f"SELECT id, username, email FROM users WHERE id = %s", (user_data["user_id"],), as_dict=True)
+            user = self.get_user_by_email(user_data["email"])
             if not user:
-                self.logger.error(f"User not found for ID: {user_data['user_id']}")
+                self.logger.error(f"User not found for email: {user_data['email']}")
                 return {"error": "User not found"}, 404
 
             # Generate new tokens
@@ -657,7 +342,7 @@ class ConnectionAPI:
             return {"tokens": new_tokens}, 200
 
         except Exception as e:
-            self.logger.error(f"Error refreshing tokens: {str(e)}")
+            self.logger.error(f"Error refreshing tokens: {e}")
             return {"error": "Failed to refresh tokens"}, 500
 
     def revoke_user_tokens(self, user_id: int) -> bool:
@@ -665,48 +350,16 @@ class ConnectionAPI:
         try:
             custom_log(f"🟢 Revoking tokens for user ID: {user_id}")
             
-            # Get all active sessions for the user
-            user_sessions_key = f"user_sessions:{user_id}"
-            sessions = self.redis_manager.get(user_sessions_key) or []
-            if not isinstance(sessions, list):
-                sessions = []
+            # Delete all sessions
+            self.db_manager.delete("user_sessions", {"user_id": user_id})
             
-            # Remove each session
-            for session_id in sessions:
-                self._remove_session(session_id, user_id)
+            # Delete all tokens
+            self.db_manager.delete("user_tokens", {"user_id": user_id})
             
-            # Clear user's active sessions list
-            self.redis_manager.delete(user_sessions_key)
-            custom_log(f"✅ Cleared user's active sessions list")
-            
-            # Remove user data from cache
-            user_cache_key = f"user:{user_id}"
-            self.redis_manager.delete(user_cache_key)
-            custom_log(f"✅ Removed user data from cache")
-            
-            # Remove tokens
+            # Clear Redis caches
             self.redis_manager.delete(f"access_token:{user_id}")
             self.redis_manager.delete(f"refresh_token:{user_id}")
-            custom_log(f"✅ Removed user tokens")
-            
-            # Remove any room memberships
-            user_rooms_key = f"user_rooms:{user_id}"
-            rooms = self.redis_manager.get(user_rooms_key) or []
-            if isinstance(rooms, list):
-                for room_id in rooms:
-                    # Remove user from room members
-                    room_members_key = f"room_members:{room_id}"
-                    members = self.redis_manager.get(room_members_key) or []
-                    if isinstance(members, list):
-                        members = [m for m in members if m != str(user_id)]
-                        if members:
-                            self.redis_manager.set(room_members_key, members)
-                        else:
-                            self.redis_manager.delete(room_members_key)
-            
-            # Clear user's rooms list
-            self.redis_manager.delete(user_rooms_key)
-            custom_log(f"✅ Cleared user's room memberships")
+            self.redis_manager.delete(f"user:{user_id}")
             
             custom_log(f"✅ Successfully revoked all tokens and cleared data for user {user_id}")
             return True
@@ -714,3 +367,18 @@ class ConnectionAPI:
         except Exception as e:
             custom_log(f"❌ Error revoking tokens: {e}")
             return False
+
+    def dispose(self):
+        """Clean up resources."""
+        try:
+            # Close database connections
+            self.db_manager.close()
+            self.analytics_db.close()
+            self.admin_db.close()
+            
+            # Close Redis connection
+            self.redis_manager.dispose()
+            
+            custom_log("✅ All connections closed")
+        except Exception as e:
+            custom_log(f"❌ Error during disposal: {e}")

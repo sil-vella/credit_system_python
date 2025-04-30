@@ -14,9 +14,6 @@ class TransactionIntegrity:
     TRANSACTION_ID_PREFIX = "tx:id:"
     TRANSACTION_HASH_PREFIX = "tx:hash:"
     
-    # Maximum age of transaction hashes to keep (in seconds)
-    TRANSACTION_WINDOW = 3600  # 1 hour
-    
     @staticmethod
     def generate_transaction_id() -> str:
         """
@@ -57,6 +54,9 @@ class TransactionIntegrity:
         Raises:
             ValidationError: If the transaction has been processed before
         """
+        if not Config.REQUIRE_TRANSACTION_ID:
+            return
+            
         redis_manager = RedisManager()
         
         # Check if transaction ID exists in Redis
@@ -76,6 +76,9 @@ class TransactionIntegrity:
             transaction_id: The transaction ID to register
             transaction_hash: The transaction hash to register
         """
+        if not Config.REQUIRE_TRANSACTION_ID:
+            return
+            
         redis_manager = RedisManager()
         
         # Store both the ID and hash with TTL
@@ -83,14 +86,14 @@ class TransactionIntegrity:
             TransactionIntegrity.TRANSACTION_ID_PREFIX,
             transaction_id,
             "1",
-            expire=TransactionIntegrity.TRANSACTION_WINDOW
+            expire=Config.TRANSACTION_WINDOW
         )
         
         redis_manager.set(
             TransactionIntegrity.TRANSACTION_HASH_PREFIX,
             transaction_hash,
             "1",
-            expire=TransactionIntegrity.TRANSACTION_WINDOW
+            expire=Config.TRANSACTION_WINDOW
         )
     
     @staticmethod
@@ -109,7 +112,7 @@ class TransactionIntegrity:
             current_time = datetime.utcnow()
             
             # Check if transaction is too old
-            if (current_time - transaction_time) > timedelta(seconds=TransactionIntegrity.TRANSACTION_WINDOW):
+            if (current_time - transaction_time) > timedelta(seconds=Config.TRANSACTION_WINDOW):
                 raise ValidationError("Transaction timestamp is too old")
                 
             # Check if transaction is from the future
@@ -136,11 +139,12 @@ class TransactionIntegrity:
         if missing_fields:
             raise ValidationError(f"Missing required fields: {', '.join(missing_fields)}")
         
-        # Validate transaction ID format
-        try:
-            ULID.from_str(transaction_data['transaction_id'])
-        except ValueError:
-            raise ValidationError("Invalid transaction ID format")
+        # Validate transaction ID format if required
+        if Config.REQUIRE_TRANSACTION_ID:
+            try:
+                ULID.from_str(transaction_data['transaction_id'])
+            except ValueError:
+                raise ValidationError("Invalid transaction ID format")
         
         # Validate timestamp
         TransactionIntegrity.validate_transaction_timestamp(transaction_data['timestamp'])

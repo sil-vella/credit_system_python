@@ -53,6 +53,7 @@ class AppManager:
 
         # Initialize rate limiting middleware
         self._setup_rate_limiting()
+        self._setup_rate_limit_headers()
 
     def run(self, app, **kwargs):
         """Run the Flask application with WebSocket support."""
@@ -116,7 +117,6 @@ class AppManager:
         ])
         custom_log("Flask Jinja loader updated with registered template directories.")
 
-    @log_function_call
     def _setup_rate_limiting(self):
         """Set up rate limiting middleware for the Flask app."""
         if not self.flask_app:
@@ -182,6 +182,9 @@ class AppManager:
                             level="WARNING"
                         )
 
+                # Store the result in request context for after_request
+                request.rate_limit_result = result
+
             except RedisError as e:
                 # Log Redis errors but allow the request to proceed
                 custom_log(f"Redis error in rate limiting: {str(e)}", level="ERROR")
@@ -191,11 +194,22 @@ class AppManager:
                 custom_log(f"Error in rate limiting: {str(e)}", level="ERROR")
                 return None
 
-            # Add rate limit headers to successful responses
+    def _setup_rate_limit_headers(self):
+        """Set up rate limit headers middleware for the Flask app."""
+        if not self.flask_app:
+            return
+
             @self.flask_app.after_request
             def add_rate_limit_headers(response):
                 try:
-                    if Config.RATE_LIMIT_HEADERS_ENABLED:
+                if Config.RATE_LIMIT_HEADERS_ENABLED and hasattr(request, 'rate_limit_result'):
+                    result = request.rate_limit_result
+                    limit_types = ['ip']
+                    if self.rate_limiter_manager.config['user']['enabled']:
+                        limit_types.append('user')
+                    if self.rate_limiter_manager.config['api_key']['enabled']:
+                        limit_types.append('api_key')
+                    
                         for limit_type in limit_types:
                             if limit_type in result['remaining']:
                                 prefix = limit_type.upper()

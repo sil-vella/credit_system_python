@@ -6,6 +6,7 @@ from ....utils.validation.sanitizer import Sanitizer
 from ....utils.validation.payload_validator import PayloadValidator
 from ....utils.validation.credit_validator import CreditValidator
 from ....utils.validation.transaction_validator import TransactionValidator
+from ....utils.validation.transaction_integrity import TransactionIntegrity
 from ....tools.logger.audit_logger import AuditLogger
 
 class TransactionProcessor:
@@ -65,6 +66,9 @@ class TransactionProcessor:
                 }
             )
             
+            # Validate transaction integrity
+            TransactionIntegrity.validate_transaction_integrity(transaction_data)
+            
             # Validate transaction payload
             TransactionProcessor.validate_transaction_payload(transaction_data)
             
@@ -73,6 +77,18 @@ class TransactionProcessor:
             
             # Validate amount
             CreditValidator.validate_amount(transaction_data['amount'])
+            
+            # Validate balance if enabled
+            if Config.ENFORCE_BALANCE_VALIDATION:
+                # Get current balance from database
+                current_balance = TransactionProcessor._get_user_balance(transaction_data['from_user_id'])
+                
+                # Validate transaction amount against balance
+                TransactionProcessor.validate_transaction_balance(
+                    transaction_data['from_user_id'],
+                    current_balance,
+                    transaction_data['amount']
+                )
             
             # Validate metadata if present
             if 'metadata' in transaction_data:
@@ -118,6 +134,21 @@ class TransactionProcessor:
                 }
             )
             raise
+    
+    @staticmethod
+    def _get_user_balance(user_id: str) -> float:
+        """
+        Get the current balance for a user.
+        
+        Args:
+            user_id: ID of the user
+            
+        Returns:
+            float: Current balance of the user
+        """
+        # TODO: Implement actual database query
+        # This is a placeholder that should be replaced with actual database access
+        return 0.0
     
     @staticmethod
     def validate_transaction_balance(

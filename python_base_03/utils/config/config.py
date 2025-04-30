@@ -148,8 +148,60 @@ class Config:
     MAX_REFERENCE_ID_LENGTH = int(os.getenv("MAX_REFERENCE_ID_LENGTH", "64"))  # Maximum reference ID length
     ALLOWED_TRANSACTION_TYPES = os.getenv("ALLOWED_TRANSACTION_TYPES", "purchase,reward,burn,transfer,refund").split(",")
 
+    # Transaction Integrity Settings
+    TRANSACTION_WINDOW = int(os.getenv("TRANSACTION_WINDOW", "3600"))  # Time window for replay attack prevention (in seconds)
+    REQUIRE_TRANSACTION_ID = os.getenv("REQUIRE_TRANSACTION_ID", "true").lower() == "true"  # Whether transaction IDs are required
+    ENFORCE_BALANCE_VALIDATION = os.getenv("ENFORCE_BALANCE_VALIDATION", "true").lower() == "true"  # Whether to enforce balance validation
+
     # Payload Validation Settings
     MAX_PAYLOAD_SIZE = int(os.getenv("MAX_PAYLOAD_SIZE", "1048576"))  # 1MB default
     MAX_NESTING_DEPTH = int(os.getenv("MAX_NESTING_DEPTH", "10"))  # Maximum nesting depth
     MAX_ARRAY_SIZE = int(os.getenv("MAX_ARRAY_SIZE", "1000"))  # Maximum array size
     MAX_STRING_LENGTH = int(os.getenv("MAX_STRING_LENGTH", "65536"))  # Maximum string length
+
+    # Encryption settings
+    ENCRYPTION_SALT = os.getenv("ENCRYPTION_SALT", "default_salt_123")  # Should be changed in production
+    SENSITIVE_FIELDS = [
+        "user_id",
+        "email",
+        "phone",
+        "address",
+        "credit_balance",
+        "transaction_history"
+    ]
+
+    # MongoDB Configuration
+    MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
+    MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "credit_system")
+    
+    # MongoDB Authentication
+    MONGODB_USERNAME = os.getenv("MONGODB_USERNAME", "")
+    MONGODB_PASSWORD = os.getenv("MONGODB_PASSWORD", "")
+    MONGODB_AUTH_SOURCE = os.getenv("MONGODB_AUTH_SOURCE", "admin")
+    
+    # MongoDB Role-Based Access Control
+    MONGODB_ROLES = {
+        "admin": ["readWriteAnyDatabase", "dbAdminAnyDatabase", "userAdminAnyDatabase"],
+        "read_write": ["readWrite"],
+        "read_only": ["read"]
+    }
+    
+    # MongoDB Replica Set Configuration
+    MONGODB_REPLICA_SET = os.getenv("MONGODB_REPLICA_SET", "")
+    MONGODB_READ_PREFERENCE = os.getenv("MONGODB_READ_PREFERENCE", "primary")
+    MONGODB_READ_CONCERN = os.getenv("MONGODB_READ_CONCERN", "majority")
+    MONGODB_WRITE_CONCERN = os.getenv("MONGODB_WRITE_CONCERN", "majority")
+    
+    # MongoDB Connection Settings
+    MONGODB_MAX_POOL_SIZE = int(os.getenv("MONGODB_MAX_POOL_SIZE", "100"))
+    MONGODB_MIN_POOL_SIZE = int(os.getenv("MONGODB_MIN_POOL_SIZE", "10"))
+    MONGODB_MAX_IDLE_TIME_MS = int(os.getenv("MONGODB_MAX_IDLE_TIME_MS", "60000"))
+    MONGODB_SOCKET_TIMEOUT_MS = int(os.getenv("MONGODB_SOCKET_TIMEOUT_MS", "5000"))
+    MONGODB_CONNECT_TIMEOUT_MS = int(os.getenv("MONGODB_CONNECT_TIMEOUT_MS", "5000"))
+    
+    # MongoDB SSL/TLS Settings
+    MONGODB_SSL = os.getenv("MONGODB_SSL", "false").lower() == "true"
+    MONGODB_SSL_CA_FILE = os.getenv("MONGODB_SSL_CA_FILE", "")
+    MONGODB_SSL_CERT_FILE = os.getenv("MONGODB_SSL_CERT_FILE", "")
+    MONGODB_SSL_KEY_FILE = os.getenv("MONGODB_SSL_KEY_FILE", "")
+    MONGODB_SSL_ALLOW_INVALID_CERTIFICATES = os.getenv("MONGODB_SSL_ALLOW_INVALID_CERTIFICATES", "false").lower() == "true"
