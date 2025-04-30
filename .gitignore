@@ -1,0 +1,12 @@
+# .gitignore
+__pycache__/
+*.pyc
+.env
+*.env
+*.sqlite3
+*.log
+.idea/
+.vscode/
+*.db
+.mypy_cache/
+*.egg-info/
