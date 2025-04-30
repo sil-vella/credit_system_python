@@ -28,12 +28,12 @@ This checklist is designed to ensure your external Credit System is secure, resi
 
 ---
 
-## ❌ Input Validation
+## ✅ Input Validation
 
-- [❌] Strict type and range validation on credit amounts
-- [❌] Allowlist only valid transaction types (e.g., purchase, reward, burn)
-- [❌] Sanitize all input fields (prevent injection attacks)
-- [❌] Reject malformed or oversized payloads early
+- [✅] Strict type and range validation on credit amounts
+- [✅] Allowlist only valid transaction types (e.g., purchase, reward, burn)
+- [✅] Sanitize all input fields (prevent injection attacks)
+- [✅] Reject malformed or oversized payloads early
 
 ---
 

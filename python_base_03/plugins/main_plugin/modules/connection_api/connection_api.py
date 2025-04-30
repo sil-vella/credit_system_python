@@ -76,7 +76,7 @@ class ConnectionAPI:
                 "keepalives_idle": Config.DB_KEEPALIVES_IDLE,
                 "keepalives_interval": Config.DB_KEEPALIVES_INTERVAL,
                 "keepalives_count": Config.DB_KEEPALIVES_COUNT,
-                "application_name": "recall_app"
+                "application_name": "cr_credit_system"
             }
 
             # Add SSL if enabled

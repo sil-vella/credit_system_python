@@ -17,7 +17,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: silvella/recall_flask_app:latest
+    image: silvella/cr_credit_system_flask_app:latest
     container_name: ${FLASK_SERVICE_NAME}
     environment:
       - PYTHONPATH=${PYTHONPATH}
@@ -56,7 +56,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - recall_app_network
+      - cr_credit_system_network
     command: >
       sh -c "
       pip install --no-cache-dir -r /app/requirements.txt &&
@@ -93,29 +93,29 @@ services:
     volumes:
       - ./db_data:/var/lib/postgresql/data
       - ./init-scripts:/docker-entrypoint-initdb.d
+      - ./init-scripts/pg_hba.conf:/var/lib/postgresql/data/pg_hba.conf  # Add this
     secrets:
       - postgres_password
     networks:
-      - recall_app_network
+      - cr_credit_system_network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       retries: 5
       start_period: 10s
+    command: >
+      postgres -c hba_file=/var/lib/postgresql/data/pg_hba.conf
 
   redis:
     image: redis:latest
     container_name: ${REDIS_SERVICE_NAME}
-    ports:
-      - "${REDIS_PORT}:6379"
     volumes:
       - ./redis_data:/data
-    environment:
-      - REDIS_PASSWORD_FILE=/run/secrets/redis_password
+      - ./redis.conf:/usr/local/etc/redis/redis.conf.template:ro
     secrets:
       - redis_password
     networks:
-      - recall_app_network
+      - cr_credit_system_network
     healthcheck:
       test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
       interval: 5s
@@ -123,13 +123,14 @@ services:
       start_period: 10s
     command: >
       sh -c "
-        REDIS_PASSWORD=$$(cat /run/secrets/redis_password)
-        redis-server --requirepass $$REDIS_PASSWORD --appendonly yes
+        REDIS_PASSWORD=$$(cat /run/secrets/redis_password) && \
+        sed \"s/__REDIS_PASSWORD_PLACEHOLDER__/$${REDIS_PASSWORD}/\" /usr/local/etc/redis/redis.conf.template > /tmp/redis.conf && \
+        redis-server /tmp/redis.conf
       "
 
   nginx:
     image: nginx:latest
-    container_name: recall_nginx
+    container_name: cr_credit_system_nginx
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
@@ -137,12 +138,12 @@ services:
     depends_on:
       - flask_app
     networks:
-      - recall_app_network
+      - cr_credit_system_network
 
 
 networks:
-  recall_app_network:
-    name: recall_app_network
+  cr_credit_system_network:
+    name: cr_credit_system_network
     driver: bridge
 
 volumes:

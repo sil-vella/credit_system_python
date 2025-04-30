@@ -136,3 +136,20 @@ class Config:
     WS_MAX_JSON_SIZE = 1024 * 1024  # 1MB for JSON messages
     WS_MAX_ARRAY_SIZE = 1000  # Maximum number of elements in arrays
     WS_MAX_OBJECT_SIZE = 100  # Maximum number of properties in objects
+
+    # Credit Amount Validation Settings
+    CREDIT_MIN_AMOUNT = float(os.getenv("CREDIT_MIN_AMOUNT", "0.01"))  # Minimum credit amount
+    CREDIT_MAX_AMOUNT = float(os.getenv("CREDIT_MAX_AMOUNT", "1000000.0"))  # Maximum credit amount
+    CREDIT_PRECISION = int(os.getenv("CREDIT_PRECISION", "2"))  # Number of decimal places allowed
+    CREDIT_ALLOW_NEGATIVE = os.getenv("CREDIT_ALLOW_NEGATIVE", "false").lower() == "true"  # Whether negative amounts are allowed
+
+    # Transaction Validation Settings
+    MAX_METADATA_SIZE = int(os.getenv("MAX_METADATA_SIZE", "1024"))  # Maximum metadata size in bytes
+    MAX_REFERENCE_ID_LENGTH = int(os.getenv("MAX_REFERENCE_ID_LENGTH", "64"))  # Maximum reference ID length
+    ALLOWED_TRANSACTION_TYPES = os.getenv("ALLOWED_TRANSACTION_TYPES", "purchase,reward,burn,transfer,refund").split(",")
+
+    # Payload Validation Settings
+    MAX_PAYLOAD_SIZE = int(os.getenv("MAX_PAYLOAD_SIZE", "1048576"))  # 1MB default
+    MAX_NESTING_DEPTH = int(os.getenv("MAX_NESTING_DEPTH", "10"))  # Maximum nesting depth
+    MAX_ARRAY_SIZE = int(os.getenv("MAX_ARRAY_SIZE", "1000"))  # Maximum array size
+    MAX_STRING_LENGTH = int(os.getenv("MAX_STRING_LENGTH", "65536"))  # Maximum string length
