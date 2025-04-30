@@ -90,6 +90,14 @@ class Config:
     RATE_LIMIT_HEADER_REMAINING = "X-RateLimit-Remaining"
     RATE_LIMIT_HEADER_RESET = "X-RateLimit-Reset"
 
+    # Auto-ban Configuration
+    AUTO_BAN_ENABLED = os.getenv("AUTO_BAN_ENABLED", "true").lower() == "true"
+    AUTO_BAN_VIOLATIONS_THRESHOLD = int(os.getenv("AUTO_BAN_VIOLATIONS_THRESHOLD", "5"))  # Number of violations before ban
+    AUTO_BAN_DURATION = int(os.getenv("AUTO_BAN_DURATION", "3600"))  # Ban duration in seconds (default 1 hour)
+    AUTO_BAN_WINDOW = int(os.getenv("AUTO_BAN_WINDOW", "300"))  # Window to track violations (default 5 minutes)
+    AUTO_BAN_PREFIX = os.getenv("AUTO_BAN_PREFIX", "ban")
+    AUTO_BAN_VIOLATIONS_PREFIX = os.getenv("AUTO_BAN_VIOLATIONS_PREFIX", "violations")
+
     # WebSocket Configuration
     WS_MAX_MESSAGE_SIZE = 1024 * 1024  # 1MB default max message size
     WS_MAX_TEXT_MESSAGE_SIZE = 1024 * 1024  # 1MB for text messages

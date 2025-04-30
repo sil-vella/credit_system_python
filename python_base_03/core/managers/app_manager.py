@@ -130,12 +130,25 @@ class AppManager:
                 return None
 
             try:
-                # Check IP-based rate limit
-                result = self.rate_limiter_manager.check_rate_limit('ip')
+                # Check all enabled rate limits
+                limit_types = ['ip']  # Always check IP
+                if self.rate_limiter_manager.config['user']['enabled']:
+                    limit_types.append('user')
+                if self.rate_limiter_manager.config['api_key']['enabled']:
+                    limit_types.append('api_key')
+
+                result = self.rate_limiter_manager.check_rate_limit(limit_types)
                 
                 if not result['allowed']:
-                    # Log rate limit hit
-                    custom_log(f"Rate limit exceeded for IP: {request.remote_addr}", level="WARNING")
+                    # Log rate limit hit with details
+                    exceeded_types = result['exceeded_types']
+                    custom_log(
+                        f"Rate limit exceeded for types: {exceeded_types}. "
+                        f"IP: {request.remote_addr}, "
+                        f"User: {self.rate_limiter_manager._get_user_id()}, "
+                        f"API Key: {self.rate_limiter_manager._get_api_key()}",
+                        level="WARNING"
+                    )
                     
                     # Rate limit exceeded
                     from flask import make_response, jsonify
@@ -143,22 +156,31 @@ class AppManager:
                         jsonify({
                             'error': 'Rate limit exceeded',
                             'message': 'Too many requests',
-                            'retry_after': result['reset_time'] - int(time.time())
+                            'exceeded_types': exceeded_types,
+                            'retry_after': max(result['reset_time'].values()) - int(time.time())
                         }),
                         429  # Too Many Requests
                     )
                     
                     # Add rate limit headers if enabled
                     if Config.RATE_LIMIT_HEADERS_ENABLED:
-                        response.headers[Config.RATE_LIMIT_HEADER_LIMIT] = str(self.rate_limiter_manager.config['ip']['requests'])
-                        response.headers[Config.RATE_LIMIT_HEADER_REMAINING] = str(result['remaining'])
-                        response.headers[Config.RATE_LIMIT_HEADER_RESET] = str(result['reset_time'])
+                        for limit_type in limit_types:
+                            if limit_type in result['remaining']:
+                                prefix = limit_type.upper()
+                                response.headers[f'X-RateLimit-{prefix}-Limit'] = str(self.rate_limiter_manager.config[limit_type]['requests'])
+                                response.headers[f'X-RateLimit-{prefix}-Remaining'] = str(result['remaining'][limit_type])
+                                response.headers[f'X-RateLimit-{prefix}-Reset'] = str(result['reset_time'][limit_type])
                     
                     return response
 
-                # Log rate limit status for monitoring
-                if result['remaining'] < 10:  # Log when getting close to limit
-                    custom_log(f"Rate limit warning for IP: {request.remote_addr}. Remaining: {result['remaining']}", level="WARNING")
+                # Log rate limit warnings for monitoring
+                for limit_type in limit_types:
+                    if limit_type in result['remaining'] and result['remaining'][limit_type] < 10:
+                        custom_log(
+                            f"Rate limit warning for {limit_type}. "
+                            f"Remaining: {result['remaining'][limit_type]}",
+                            level="WARNING"
+                        )
 
             except RedisError as e:
                 # Log Redis errors but allow the request to proceed
@@ -174,9 +196,12 @@ class AppManager:
             def add_rate_limit_headers(response):
                 try:
                     if Config.RATE_LIMIT_HEADERS_ENABLED:
-                        response.headers[Config.RATE_LIMIT_HEADER_LIMIT] = str(self.rate_limiter_manager.config['ip']['requests'])
-                        response.headers[Config.RATE_LIMIT_HEADER_REMAINING] = str(result['remaining'])
-                        response.headers[Config.RATE_LIMIT_HEADER_RESET] = str(result['reset_time'])
+                        for limit_type in limit_types:
+                            if limit_type in result['remaining']:
+                                prefix = limit_type.upper()
+                                response.headers[f'X-RateLimit-{prefix}-Limit'] = str(self.rate_limiter_manager.config[limit_type]['requests'])
+                                response.headers[f'X-RateLimit-{prefix}-Remaining'] = str(result['remaining'][limit_type])
+                                response.headers[f'X-RateLimit-{prefix}-Reset'] = str(result['reset_time'][limit_type])
                 except Exception as e:
                     custom_log(f"Error adding rate limit headers: {str(e)}", level="ERROR")
                 return response
