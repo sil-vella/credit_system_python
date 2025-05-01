@@ -13,6 +13,7 @@ from utils.config.config import Config
 from redis.exceptions import RedisError
 from core.monitoring.metrics_collector import metrics_collector
 import logging
+from apscheduler.schedulers.background import BackgroundScheduler
 
 
 class AppManager:
@@ -43,6 +44,10 @@ class AppManager:
 
         self.flask_app = app
         custom_log(f"AppManager initialized with Flask app: {self.flask_app}")
+
+        # Initialize scheduler
+        self.scheduler = BackgroundScheduler()
+        self.scheduler.start()
 
         # Initialize services
         self.services_manager.initialize_services()

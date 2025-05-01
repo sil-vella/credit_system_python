@@ -38,6 +38,23 @@ class ConnectionAPI:
         # ✅ Ensure collections exist in the database
         self.initialize_database()
 
+    def register_route(self, route, view_func, methods=None):
+        """Register a route with the Flask application.
+        
+        :param route: str - The URL route to register
+        :param view_func: callable - The view function to handle the route
+        :param methods: list - HTTP methods allowed for this route (default: ["GET"])
+        """
+        if not self.app:
+            raise RuntimeError("Cannot register route before initializing the Flask app")
+        
+        if methods is None:
+            methods = ["GET"]
+            
+        self.app.add_url_rule(route, view_func=view_func, methods=methods)
+        self.registered_routes.append((route, view_func, methods))
+        self.logger.info(f"Registered route: {route} with methods {methods}")
+
     def initialize(self, app):
         """Initialize the ConnectionAPI with a Flask app."""
         if not hasattr(app, "add_url_rule"):

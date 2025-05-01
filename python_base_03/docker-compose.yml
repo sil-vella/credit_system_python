@@ -52,10 +52,7 @@ services:
       - MONGODB_SERVICE_NAME_FILE=/run/secrets/mongodb_service_name
       - MONGODB_ROOT_USER_FILE=/run/secrets/mongodb_root_user
       - MONGODB_ROOT_PASSWORD_FILE=/run/secrets/mongodb_root_password
-      - MONGODB_USER_FILE=/run/secrets/mongodb_user
-      - MONGODB_PASSWORD_FILE=/run/secrets/mongodb_user_password
       - MONGODB_DB_NAME_FILE=/run/secrets/mongodb_db_name
-      - MONGODB_PORT_FILE=/run/secrets/mongodb_port
       - REDIS_SERVICE_NAME_FILE=/run/secrets/redis_service_name
       - REDIS_HOST_FILE=/run/secrets/redis_host
       - REDIS_PORT_FILE=/run/secrets/redis_port
@@ -78,10 +75,7 @@ services:
       - mongodb_service_name
       - mongodb_root_user
       - mongodb_root_password
-      - mongodb_user
-      - mongodb_user_password
       - mongodb_db_name
-      - mongodb_port
       - redis_service_name
       - redis_host
       - redis_port
@@ -94,8 +88,6 @@ services:
       - redis_password
       - stripe_secret_key
     depends_on:
-      init-secrets:
-        condition: service_completed_successfully
       mongodb:
         condition: service_healthy
       redis:
@@ -114,41 +106,22 @@ services:
       retries: 5
       start_period: 10s
 
-  init-secrets:
-    image: alpine:latest
-    volumes:
-      - ./secrets:/secrets
-    command: >
-      sh -c "
-        chmod 600 /secrets/* &&
-        echo 'Secrets initialized successfully' &&
-        exit 0
-      "
-    networks:
-      - cr_credit_system_network
-
   mongodb:
     image: mongo:latest
     container_name: mongodb
     restart: always
+    command: ["mongod", "--bind_ip_all"]
     environment:
-      MONGO_INITDB_ROOT_USERNAME_FILE: /run/secrets/mongodb_root_user
-      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongodb_root_password
-      MONGO_INITDB_DATABASE_FILE: /run/secrets/mongodb_db_name
-      MONGODB_USER_FILE: /run/secrets/mongodb_user
-      MONGODB_PASSWORD_FILE: /run/secrets/mongodb_user_password
-      MONGODB_PORT_FILE: /run/secrets/mongodb_port
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: rootpassword
+      MONGO_INITDB_DATABASE: admin
     volumes:
       - cr_credit_system_mongodb_data:/data/db
-      - ./init-scripts:/docker-entrypoint-initdb.d:ro
       - ./secrets:/run/secrets:ro
     secrets:
       - mongodb_root_user
       - mongodb_root_password
-      - mongodb_user
-      - mongodb_user_password
       - mongodb_db_name
-      - mongodb_port
     ports:
       - "27017:27017"
     networks:
@@ -159,14 +132,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-    command: ["mongod", "--auth", "--bind_ip_all"]
 
   redis:
     image: redis:alpine
     container_name: redis
     restart: always
-    depends_on:
-      - init-secrets
     command: sh -c 'redis-server --requirepass "$$(cat /run/secrets/redis_password)"'
     volumes:
       - cr_credit_system_redis_data:/data
@@ -223,8 +193,6 @@ services:
     image: grafana/grafana:latest
     container_name: cr_credit_system_grafana
     restart: always
-    depends_on:
-      - init-secrets
     environment:
       - GF_SECURITY_ADMIN_PASSWORD_FILE=/run/secrets/grafana_admin_password
     volumes:

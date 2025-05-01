@@ -37,8 +37,8 @@ class DatabaseManager:
         """Set up MongoDB connection with role-based access control and read-only replicas."""
         try:
             # Prefer secrets files for all config values
-            mongodb_user = read_secret_file('/run/secrets/mongodb_user') or os.environ.get('MONGODB_USER', 'credit_system_user')
-            password = read_secret_file('/run/secrets/mongodb_user_password') or os.environ.get('MONGODB_PASSWORD')
+            mongodb_user = read_secret_file('/run/secrets/mongodb_root_user') or os.environ.get('MONGODB_ROOT_USER', 'root')
+            password = read_secret_file('/run/secrets/mongodb_root_password') or os.environ.get('MONGODB_ROOT_PASSWORD')
             mongodb_host = read_secret_file('/run/secrets/mongodb_service_name') or os.environ.get('MONGODB_SERVICE_NAME', 'mongodb')
             mongodb_port = read_secret_file('/run/secrets/mongodb_port') or os.environ.get('MONGODB_PORT', '27017')
             mongodb_db = read_secret_file('/run/secrets/mongodb_db_name') or os.environ.get('MONGODB_DB_NAME', 'credit_system')
