@@ -1,0 +1,11 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: vault-auth
+nodes:
+- role: control-plane
+  extraPortMappings:
+  - containerPort: 8200
+    hostPort: 8201  # Different from your docker-compose Vault port
+    protocol: TCP
+networking:
+  apiServerAddress: "127.0.0.1" 

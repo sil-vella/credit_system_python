@@ -39,8 +39,88 @@ secrets:
     file: ./secrets/stripe_secret_key
   grafana_admin_password:
     file: ./secrets/grafana_admin_password
+  vault_token:
+    file: ./secrets/vault_token
 
 services:
+  k8s-init:
+    image: alpine:3.18
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/workspace
+      - k8s-config:/k8s-config
+    environment:
+      - VAULT_ADDR=http://vault:8200
+      - KUBECONFIG=/k8s-config/kubeconfig
+    command: >
+      sh -c "
+        apk add --no-cache docker-cli curl kind kubectl &&
+        cd /workspace &&
+        kind create cluster --config kind-config.yaml --kubeconfig /k8s-config/kubeconfig &&
+        until kubectl --kubeconfig /k8s-config/kubeconfig get pods -A | grep -q 'Running'; do
+          echo 'Waiting for cluster to be ready...'
+          sleep 5
+        done &&
+        echo 'Kubernetes cluster is ready'
+      "
+    networks:
+      - cr_credit_system_network
+
+  vault:
+    image: hashicorp/vault:1.15
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_ADDR: 'http://0.0.0.0:8200'
+      VAULT_API_ADDR: 'http://0.0.0.0:8200'
+      VAULT_DEV_ROOT_TOKEN_ID: 'dev-token'
+      VAULT_DEV_LISTEN_ADDRESS: '0.0.0.0:8200'
+    command: server -dev
+    networks:
+      - cr_credit_system_network
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - vault-data:/vault/file
+      - k8s-config:/k8s-config:ro
+    depends_on:
+      - k8s-init
+
+  vault-config:
+    image: hashicorp/vault:1.15
+    volumes:
+      - k8s-config:/k8s-config:ro
+      - ${PWD}/secrets:/secrets
+      - ${PWD}/scripts:/scripts
+    environment:
+      - VAULT_ADDR=http://vault:8200
+      - VAULT_TOKEN=dev-token
+      - KUBECONFIG=/k8s-config/kubeconfig
+    command: >
+      sh -c "
+        apk add --no-cache curl &&
+        mkdir -p /secrets &&
+        if [ ! -f /secrets/vault_token ]; then
+          echo 'Creating vault_token file...' &&
+          echo 'dev-token' > /secrets/vault_token &&
+          chmod 600 /secrets/vault_token &&
+          echo '✅ Vault token secret has been configured!'
+        fi &&
+        chmod +x /scripts/init-vault-secrets.sh &&
+        /scripts/init-vault-secrets.sh &&
+        echo '✅ Vault configuration completed!'
+      "
+    networks:
+      - cr_credit_system_network
+    depends_on:
+      vault:
+        condition: service_healthy
+
   flask_app:
     build:
       context: .
@@ -48,6 +128,9 @@ services:
     image: silvella/cr_credit_system_flask_app:latest
     container_name: flask
     environment:
+      - VAULT_ADDR=http://vault:8200
+      - KUBECONFIG=/k8s-config/kubeconfig
+      - VAULT_TOKEN=${VAULT_TOKEN}
       - PYTHONPATH_FILE=/run/secrets/pythonpath
       - MONGODB_SERVICE_NAME_FILE=/run/secrets/mongodb_service_name
       - MONGODB_ROOT_USER_FILE=/run/secrets/mongodb_root_user
@@ -71,6 +154,7 @@ services:
       - ./static:/app/static
       - ./tools:/app/tools
       - ./utils:/app/utils
+      - k8s-config:/k8s-config:ro
     secrets:
       - mongodb_service_name
       - mongodb_root_user
@@ -87,7 +171,10 @@ services:
       - encryption_key
       - redis_password
       - stripe_secret_key
+      - vault_token
     depends_on:
+      vault-config:
+        condition: service_completed_successfully
       mongodb:
         condition: service_healthy
       redis:
@@ -249,3 +336,7 @@ volumes:
     name: cr_credit_system_grafana_data
   alertmanager_data:
     name: cr_credit_system_alertmanager_data
+  k8s-config:
+    name: cr_credit_system_k8s_config
+  vault-data:
+    name: cr_credit_system_vault_data

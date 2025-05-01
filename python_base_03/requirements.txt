@@ -39,6 +39,7 @@ eventlet>=0.35.2
 
 # Security
 cryptography>=41.0.0
+hvac==2.1.0  # HashiCorp Vault client
 
 # Development tools
 pylint==2.17.5

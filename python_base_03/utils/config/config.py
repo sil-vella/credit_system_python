@@ -1,4 +1,26 @@
 import os
+from .vault_secrets import vault_secrets
+
+def get_secret(secret_name: str, vault_path: str = None, vault_key: str = None) -> str:
+    """
+    Get a secret with the following precedence:
+    1. Vault (if path and key provided)
+    2. Docker secrets
+    3. Environment variables
+    """
+    # Try Vault first if path and key are provided
+    if vault_path and vault_key:
+        vault_value = vault_secrets.get_secret(vault_path, vault_key)
+        if vault_value is not None:
+            return vault_value
+
+    # Try Docker secrets
+    secret_value = read_secret_file(secret_name)
+    if secret_value is not None:
+        return secret_value
+
+    # Fall back to environment variables
+    return os.getenv(secret_name)
 
 # Helper to read secrets from files (returns None if not found)
 def read_secret_file(secret_name: str) -> str:
@@ -11,120 +33,121 @@ def read_secret_file(secret_name: str) -> str:
 
 class Config:
     # Flask Configuration
-    FLASK_SERVICE_NAME = read_secret_file("flask_service_name") or os.getenv("FLASK_SERVICE_NAME", "flask")
-    FLASK_PORT = int(read_secret_file("flask_port") or os.getenv("FLASK_PORT", "5000"))
-    PYTHONPATH = read_secret_file("pythonpath") or os.getenv("PYTHONPATH", "/app")
+    FLASK_SERVICE_NAME = get_secret("flask_service_name", "secret/app/flask", "service_name") or "flask"
+    FLASK_PORT = int(get_secret("flask_port", "secret/app/flask", "port") or "5000")
+    PYTHONPATH = get_secret("pythonpath", "secret/app/flask", "pythonpath") or os.getenv("PYTHONPATH", "/app")
 
     # MongoDB Configuration
-    MONGODB_SERVICE_NAME = read_secret_file("mongodb_service_name") or os.getenv("MONGODB_SERVICE_NAME", "mongodb")
-    MONGODB_ROOT_USER = read_secret_file("mongodb_root_user") or os.getenv("MONGODB_ROOT_USER", "root")
-    MONGODB_ROOT_PASSWORD = read_secret_file("mongodb_root_password") or os.getenv("MONGODB_ROOT_PASSWORD", "rootpassword")
-    MONGODB_USER = read_secret_file("mongodb_user") or os.getenv("MONGODB_USER", "credit_system_user")
-    MONGODB_PASSWORD = read_secret_file("mongodb_user_password") or os.getenv("MONGODB_PASSWORD", "credit_system_password")
-    MONGODB_DB_NAME = read_secret_file("mongodb_db_name") or os.getenv("MONGODB_DB_NAME", "credit_system")
-    MONGODB_PORT = int(read_secret_file("mongodb_port") or os.getenv("MONGODB_PORT", "27017"))
+    MONGODB_SERVICE_NAME = get_secret("mongodb_service_name", "secret/app/mongodb", "service_name") or "mongodb"
+    MONGODB_ROOT_USER = get_secret("mongodb_root_user", "secret/app/mongodb", "root_username") or "root"
+    MONGODB_ROOT_PASSWORD = get_secret("mongodb_root_password", "secret/app/mongodb", "root_password") or "rootpassword"
+    MONGODB_USER = get_secret("mongodb_user", "secret/app/mongodb", "username") or "credit_system_user"
+    MONGODB_PASSWORD = get_secret("mongodb_user_password", "secret/app/mongodb", "password") or "credit_system_password"
+    MONGODB_DB_NAME = get_secret("mongodb_db_name", "secret/app/mongodb", "db_name") or "credit_system"
+    MONGODB_PORT = int(get_secret("mongodb_port", "secret/app/mongodb", "port") or "27017")
 
     # Redis Configuration
-    REDIS_SERVICE_NAME = read_secret_file("redis_service_name") or os.getenv("REDIS_SERVICE_NAME", "redis")
-    REDIS_HOST = read_secret_file("redis_host") or os.getenv("REDIS_HOST", "redis")
-    REDIS_PORT = int(read_secret_file("redis_port") or os.getenv("REDIS_PORT", "6379"))
+    REDIS_SERVICE_NAME = get_secret("redis_service_name", "secret/app/redis", "service_name") or "redis"
+    REDIS_HOST = get_secret("redis_host", "secret/app/redis", "host") or "redis"
+    REDIS_PORT = int(get_secret("redis_port", "secret/app/redis", "port") or "6379")
+    REDIS_PASSWORD = get_secret("redis_password", "secret/app/redis", "password")
 
     # Debug mode
-    DEBUG = os.getenv("FLASK_DEBUG", "False").lower() in ("true", "1")
+    DEBUG = get_secret("FLASK_DEBUG", "secret/app/flask", "debug").lower() in ("true", "1")
 
     # App URL Configuration
-    APP_URL = os.getenv("APP_URL", "http://localhost:5000")
+    APP_URL = get_secret("APP_URL", "secret/app/flask", "url") or os.getenv("APP_URL", "http://localhost:5000")
 
     # External Credit System Configuration
-    CREDIT_SYSTEM_URL = os.getenv("CREDIT_SYSTEM_URL", "http://localhost:8000")
-    CREDIT_SYSTEM_API_KEY = os.getenv("CREDIT_SYSTEM_API_KEY", "test_api_key")
+    CREDIT_SYSTEM_URL = get_secret("CREDIT_SYSTEM_URL", "secret/app/flask", "url") or os.getenv("CREDIT_SYSTEM_URL", "http://localhost:8000")
+    CREDIT_SYSTEM_API_KEY = get_secret("CREDIT_SYSTEM_API_KEY", "secret/app/flask", "api_key") or "test_api_key"
 
     # JWT Configuration
-    JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-super-secret-key-change-in-production")
-    JWT_ACCESS_TOKEN_EXPIRES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES", "3600"))  # 1 hour in seconds
-    JWT_REFRESH_TOKEN_EXPIRES = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRES", "604800"))  # 7 days in seconds
-    JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-    JWT_TOKEN_TYPE = os.getenv("JWT_TOKEN_TYPE", "bearer")
-    JWT_HEADER_NAME = os.getenv("JWT_HEADER_NAME", "Authorization")
-    JWT_HEADER_TYPE = os.getenv("JWT_HEADER_TYPE", "Bearer")
-    JWT_QUERY_STRING_NAME = os.getenv("JWT_QUERY_STRING_NAME", "token")
-    JWT_QUERY_STRING_VALUE_PREFIX = os.getenv("JWT_QUERY_STRING_VALUE_PREFIX", "Bearer")
-    JWT_COOKIE_NAME = os.getenv("JWT_COOKIE_NAME", "access_token")
-    JWT_COOKIE_CSRF_PROTECT = os.getenv("JWT_COOKIE_CSRF_PROTECT", "true").lower() == "true"
-    JWT_COOKIE_SECURE = os.getenv("JWT_COOKIE_SECURE", "true").lower() == "true"
-    JWT_COOKIE_SAMESITE = os.getenv("JWT_COOKIE_SAMESITE", "Lax")
-    JWT_COOKIE_DOMAIN = os.getenv("JWT_COOKIE_DOMAIN", None)
-    JWT_COOKIE_PATH = os.getenv("JWT_COOKIE_PATH", "/")
-    JWT_COOKIE_MAX_AGE = int(os.getenv("JWT_COOKIE_MAX_AGE", "3600"))  # 1 hour in seconds
+    JWT_SECRET_KEY = get_secret("jwt_secret_key", "secret/app/flask", "jwt_key") or "your-super-secret-key-change-in-production"
+    JWT_ACCESS_TOKEN_EXPIRES = int(get_secret("JWT_ACCESS_TOKEN_EXPIRES", "secret/app/flask", "access_token_expires") or "3600")  # 1 hour in seconds
+    JWT_REFRESH_TOKEN_EXPIRES = int(get_secret("JWT_REFRESH_TOKEN_EXPIRES", "secret/app/flask", "refresh_token_expires") or "604800")  # 7 days in seconds
+    JWT_ALGORITHM = get_secret("JWT_ALGORITHM", "secret/app/flask", "jwt_algorithm") or "HS256"
+    JWT_TOKEN_TYPE = get_secret("JWT_TOKEN_TYPE", "secret/app/flask", "jwt_token_type") or "bearer"
+    JWT_HEADER_NAME = get_secret("JWT_HEADER_NAME", "secret/app/flask", "jwt_header_name") or "Authorization"
+    JWT_HEADER_TYPE = get_secret("JWT_HEADER_TYPE", "secret/app/flask", "jwt_header_type") or "Bearer"
+    JWT_QUERY_STRING_NAME = get_secret("JWT_QUERY_STRING_NAME", "secret/app/flask", "jwt_query_string_name") or "token"
+    JWT_QUERY_STRING_VALUE_PREFIX = get_secret("JWT_QUERY_STRING_VALUE_PREFIX", "secret/app/flask", "jwt_query_string_value_prefix") or "Bearer"
+    JWT_COOKIE_NAME = get_secret("JWT_COOKIE_NAME", "secret/app/flask", "jwt_cookie_name") or "access_token"
+    JWT_COOKIE_CSRF_PROTECT = get_secret("JWT_COOKIE_CSRF_PROTECT", "secret/app/flask", "jwt_cookie_csrf_protect").lower() == "true"
+    JWT_COOKIE_SECURE = get_secret("JWT_COOKIE_SECURE", "secret/app/flask", "jwt_cookie_secure").lower() == "true"
+    JWT_COOKIE_SAMESITE = get_secret("JWT_COOKIE_SAMESITE", "secret/app/flask", "jwt_cookie_samesite") or "Lax"
+    JWT_COOKIE_DOMAIN = get_secret("JWT_COOKIE_DOMAIN", "secret/app/flask", "jwt_cookie_domain") or None
+    JWT_COOKIE_PATH = get_secret("JWT_COOKIE_PATH", "secret/app/flask", "jwt_cookie_path") or "/"
+    JWT_COOKIE_MAX_AGE = int(get_secret("JWT_COOKIE_MAX_AGE", "secret/app/flask", "jwt_cookie_max_age") or "3600")  # 1 hour in seconds
 
     # Toggle SSL for PostgreSQL
-    USE_SSL = os.getenv("USE_SSL", "False").lower() in ("true", "1")
+    USE_SSL = get_secret("USE_SSL", "secret/app/flask", "ssl").lower() in ("true", "1")
 
     # Database Pool Configuration
-    DB_POOL_MIN_CONN = int(os.getenv("DB_POOL_MIN_CONN", "1"))
-    DB_POOL_MAX_CONN = int(os.getenv("DB_POOL_MAX_CONN", "10"))
+    DB_POOL_MIN_CONN = int(get_secret("DB_POOL_MIN_CONN", "secret/app/flask", "min_conn") or "1")
+    DB_POOL_MAX_CONN = int(get_secret("DB_POOL_MAX_CONN", "secret/app/flask", "max_conn") or "10")
     
     # Connection Pool Security Settings
-    DB_CONNECT_TIMEOUT = int(os.getenv("DB_CONNECT_TIMEOUT", "10"))  # Connection timeout in seconds
-    DB_STATEMENT_TIMEOUT = int(os.getenv("DB_STATEMENT_TIMEOUT", "30000"))  # Statement timeout in milliseconds
-    DB_KEEPALIVES = int(os.getenv("DB_KEEPALIVES", "1"))  # Enable keepalive
-    DB_KEEPALIVES_IDLE = int(os.getenv("DB_KEEPALIVES_IDLE", "30"))  # Idle timeout in seconds
-    DB_KEEPALIVES_INTERVAL = int(os.getenv("DB_KEEPALIVES_INTERVAL", "10"))  # Keepalive interval in seconds
-    DB_KEEPALIVES_COUNT = int(os.getenv("DB_KEEPALIVES_COUNT", "5"))  # Maximum number of keepalive attempts
-    DB_MAX_CONNECTIONS_PER_USER = int(os.getenv("DB_MAX_CONNECTIONS_PER_USER", "5"))  # Maximum connections per user
+    DB_CONNECT_TIMEOUT = int(get_secret("DB_CONNECT_TIMEOUT", "secret/app/flask", "connect_timeout") or "10")  # Connection timeout in seconds
+    DB_STATEMENT_TIMEOUT = int(get_secret("DB_STATEMENT_TIMEOUT", "secret/app/flask", "statement_timeout") or "30000")  # Statement timeout in milliseconds
+    DB_KEEPALIVES = int(get_secret("DB_KEEPALIVES", "secret/app/flask", "keepalive") or "1")  # Enable keepalive
+    DB_KEEPALIVES_IDLE = int(get_secret("DB_KEEPALIVES_IDLE", "secret/app/flask", "keepalive_idle") or "30")  # Idle timeout in seconds
+    DB_KEEPALIVES_INTERVAL = int(get_secret("DB_KEEPALIVES_INTERVAL", "secret/app/flask", "keepalive_interval") or "10")  # Keepalive interval in seconds
+    DB_KEEPALIVES_COUNT = int(get_secret("DB_KEEPALIVES_COUNT", "secret/app/flask", "keepalive_count") or "5")  # Maximum number of keepalive attempts
+    DB_MAX_CONNECTIONS_PER_USER = int(get_secret("DB_MAX_CONNECTIONS_PER_USER", "secret/app/flask", "max_conn_per_user") or "5")  # Maximum connections per user
     
     # Resource Protection
-    DB_MAX_QUERY_SIZE = int(os.getenv("DB_MAX_QUERY_SIZE", "10000"))  # Maximum query size in bytes
-    DB_MAX_RESULT_SIZE = int(os.getenv("DB_MAX_RESULT_SIZE", "1048576"))  # Maximum result size in bytes (1MB)
+    DB_MAX_QUERY_SIZE = int(get_secret("DB_MAX_QUERY_SIZE", "secret/app/flask", "max_query_size") or "10000")  # Maximum query size in bytes
+    DB_MAX_RESULT_SIZE = int(get_secret("DB_MAX_RESULT_SIZE", "secret/app/flask", "max_result_size") or "1048576")  # Maximum result size in bytes (1MB)
     
     # Connection Retry Settings
-    DB_RETRY_COUNT = int(os.getenv("DB_RETRY_COUNT", "3"))  # Number of connection retry attempts
-    DB_RETRY_DELAY = int(os.getenv("DB_RETRY_DELAY", "1"))  # Delay between retries in seconds
+    DB_RETRY_COUNT = int(get_secret("DB_RETRY_COUNT", "secret/app/flask", "retry_count") or "3")  # Number of connection retry attempts
+    DB_RETRY_DELAY = int(get_secret("DB_RETRY_DELAY", "secret/app/flask", "retry_delay") or "1")  # Delay between retries in seconds
     
     # Flask-Limiter: Redis backend for rate limiting
-    RATE_LIMIT_STORAGE_URL = os.getenv("RATE_LIMIT_STORAGE_URL", "redis://localhost:6379/0")
+    RATE_LIMIT_STORAGE_URL = get_secret("RATE_LIMIT_STORAGE_URL", "secret/app/flask", "rate_limit_storage_url") or "redis://localhost:6379/0"
 
     # Enable or disable logging
-    LOGGING_ENABLED = os.getenv("LOGGING_ENABLED", "True").lower() in ("true", "1")
+    LOGGING_ENABLED = get_secret("LOGGING_ENABLED", "secret/app/flask", "logging_enabled").lower() in ("true", "1")
 
     # Redis Security Settings
-    REDIS_USE_SSL = os.getenv("REDIS_USE_SSL", "false").lower() == "true"
-    REDIS_SSL_VERIFY_MODE = os.getenv("REDIS_SSL_VERIFY_MODE", "required")
-    REDIS_MAX_CONNECTIONS = int(os.getenv("REDIS_MAX_CONNECTIONS", "10"))
-    REDIS_SOCKET_TIMEOUT = int(os.getenv("REDIS_SOCKET_TIMEOUT", "5"))
-    REDIS_SOCKET_CONNECT_TIMEOUT = int(os.getenv("REDIS_SOCKET_CONNECT_TIMEOUT", "5"))
-    REDIS_RETRY_ON_TIMEOUT = os.getenv("REDIS_RETRY_ON_TIMEOUT", "true").lower() == "true"
-    REDIS_MAX_RETRIES = int(os.getenv("REDIS_MAX_RETRIES", "3"))
-    REDIS_KEY_PREFIX = os.getenv("REDIS_KEY_PREFIX", "app")
-    REDIS_ENCRYPTION_KEY = os.getenv("REDIS_ENCRYPTION_KEY", "")
-    REDIS_ENCRYPTION_SALT = os.getenv("REDIS_ENCRYPTION_SALT", "")
-    REDIS_ENCRYPTION_ITERATIONS = int(os.getenv("REDIS_ENCRYPTION_ITERATIONS", "100000"))
-    REDIS_MAX_CACHE_SIZE = int(os.getenv("REDIS_MAX_CACHE_SIZE", "1048576"))  # 1MB in bytes
-    REDIS_CACHE_TTL = int(os.getenv("REDIS_CACHE_TTL", "300"))  # 5 minutes in seconds
+    REDIS_USE_SSL = get_secret("REDIS_USE_SSL", "secret/app/flask", "redis_ssl").lower() == "true"
+    REDIS_SSL_VERIFY_MODE = get_secret("REDIS_SSL_VERIFY_MODE", "secret/app/flask", "redis_ssl_verify_mode") or "required"
+    REDIS_MAX_CONNECTIONS = int(get_secret("REDIS_MAX_CONNECTIONS", "secret/app/flask", "redis_max_conn") or "10")
+    REDIS_SOCKET_TIMEOUT = int(get_secret("REDIS_SOCKET_TIMEOUT", "secret/app/flask", "redis_socket_timeout") or "5")
+    REDIS_SOCKET_CONNECT_TIMEOUT = int(get_secret("REDIS_SOCKET_CONNECT_TIMEOUT", "secret/app/flask", "redis_socket_connect_timeout") or "5")
+    REDIS_RETRY_ON_TIMEOUT = get_secret("REDIS_RETRY_ON_TIMEOUT", "secret/app/flask", "redis_retry_on_timeout").lower() == "true"
+    REDIS_MAX_RETRIES = int(get_secret("REDIS_MAX_RETRIES", "secret/app/flask", "redis_max_retries") or "3")
+    REDIS_KEY_PREFIX = get_secret("REDIS_KEY_PREFIX", "secret/app/flask", "redis_key_prefix") or "app"
+    REDIS_ENCRYPTION_KEY = get_secret("REDIS_ENCRYPTION_KEY", "secret/app/flask", "redis_encryption_key") or ""
+    REDIS_ENCRYPTION_SALT = get_secret("REDIS_ENCRYPTION_SALT", "secret/app/flask", "redis_encryption_salt") or ""
+    REDIS_ENCRYPTION_ITERATIONS = int(get_secret("REDIS_ENCRYPTION_ITERATIONS", "secret/app/flask", "redis_encryption_iterations") or "100000")
+    REDIS_MAX_CACHE_SIZE = int(get_secret("REDIS_MAX_CACHE_SIZE", "secret/app/flask", "redis_max_cache_size") or "1048576")  # 1MB in bytes
+    REDIS_CACHE_TTL = int(get_secret("REDIS_CACHE_TTL", "secret/app/flask", "redis_cache_ttl") or "300")  # 5 minutes in seconds
 
     # Rate Limiting Configuration
-    RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
-    RATE_LIMIT_IP_REQUESTS = int(os.getenv("RATE_LIMIT_IP_REQUESTS", "100"))  # Requests per window
-    RATE_LIMIT_IP_WINDOW = int(os.getenv("RATE_LIMIT_IP_WINDOW", "60"))  # Window in seconds
-    RATE_LIMIT_IP_PREFIX = os.getenv("RATE_LIMIT_IP_PREFIX", "rate_limit:ip")
-    RATE_LIMIT_USER_REQUESTS = int(os.getenv("RATE_LIMIT_USER_REQUESTS", "1000"))  # Requests per window
-    RATE_LIMIT_USER_WINDOW = int(os.getenv("RATE_LIMIT_USER_WINDOW", "3600"))  # Window in seconds
-    RATE_LIMIT_USER_PREFIX = os.getenv("RATE_LIMIT_USER_PREFIX", "rate_limit:user")
-    RATE_LIMIT_API_KEY_REQUESTS = int(os.getenv("RATE_LIMIT_API_KEY_REQUESTS", "10000"))  # Requests per window
-    RATE_LIMIT_API_KEY_WINDOW = int(os.getenv("RATE_LIMIT_API_KEY_WINDOW", "3600"))  # Window in seconds
-    RATE_LIMIT_API_KEY_PREFIX = os.getenv("RATE_LIMIT_API_KEY_PREFIX", "rate_limit:api_key")
-    RATE_LIMIT_HEADERS_ENABLED = os.getenv("RATE_LIMIT_HEADERS_ENABLED", "true").lower() == "true"
-    RATE_LIMIT_HEADER_LIMIT = "X-RateLimit-Limit"
-    RATE_LIMIT_HEADER_REMAINING = "X-RateLimit-Remaining"
-    RATE_LIMIT_HEADER_RESET = "X-RateLimit-Reset"
+    RATE_LIMIT_ENABLED = get_secret("RATE_LIMIT_ENABLED", "secret/app/flask", "rate_limit_enabled").lower() == "true"
+    RATE_LIMIT_IP_REQUESTS = int(get_secret("RATE_LIMIT_IP_REQUESTS", "secret/app/flask", "rate_limit_ip_requests") or "100")  # Requests per window
+    RATE_LIMIT_IP_WINDOW = int(get_secret("RATE_LIMIT_IP_WINDOW", "secret/app/flask", "rate_limit_ip_window") or "60")  # Window in seconds
+    RATE_LIMIT_IP_PREFIX = get_secret("RATE_LIMIT_IP_PREFIX", "secret/app/flask", "rate_limit_ip_prefix") or "rate_limit:ip"
+    RATE_LIMIT_USER_REQUESTS = int(get_secret("RATE_LIMIT_USER_REQUESTS", "secret/app/flask", "rate_limit_user_requests") or "1000")  # Requests per window
+    RATE_LIMIT_USER_WINDOW = int(get_secret("RATE_LIMIT_USER_WINDOW", "secret/app/flask", "rate_limit_user_window") or "3600")  # Window in seconds
+    RATE_LIMIT_USER_PREFIX = get_secret("RATE_LIMIT_USER_PREFIX", "secret/app/flask", "rate_limit_user_prefix") or "rate_limit:user"
+    RATE_LIMIT_API_KEY_REQUESTS = int(get_secret("RATE_LIMIT_API_KEY_REQUESTS", "secret/app/flask", "rate_limit_api_key_requests") or "10000")  # Requests per window
+    RATE_LIMIT_API_KEY_WINDOW = int(get_secret("RATE_LIMIT_API_KEY_WINDOW", "secret/app/flask", "rate_limit_api_key_window") or "3600")  # Window in seconds
+    RATE_LIMIT_API_KEY_PREFIX = get_secret("RATE_LIMIT_API_KEY_PREFIX", "secret/app/flask", "rate_limit_api_key_prefix") or "rate_limit:api_key"
+    RATE_LIMIT_HEADERS_ENABLED = get_secret("RATE_LIMIT_HEADERS_ENABLED", "secret/app/flask", "rate_limit_headers_enabled").lower() == "true"
+    RATE_LIMIT_HEADER_LIMIT = get_secret("RATE_LIMIT_HEADER_LIMIT", "secret/app/flask", "rate_limit_header_limit") or "X-RateLimit-Limit"
+    RATE_LIMIT_HEADER_REMAINING = get_secret("RATE_LIMIT_HEADER_REMAINING", "secret/app/flask", "rate_limit_header_remaining") or "X-RateLimit-Remaining"
+    RATE_LIMIT_HEADER_RESET = get_secret("RATE_LIMIT_HEADER_RESET", "secret/app/flask", "rate_limit_header_reset") or "X-RateLimit-Reset"
 
     # Auto-ban Configuration
-    AUTO_BAN_ENABLED = os.getenv("AUTO_BAN_ENABLED", "true").lower() == "true"
-    AUTO_BAN_VIOLATIONS_THRESHOLD = int(os.getenv("AUTO_BAN_VIOLATIONS_THRESHOLD", "5"))  # Number of violations before ban
-    AUTO_BAN_DURATION = int(os.getenv("AUTO_BAN_DURATION", "3600"))  # Ban duration in seconds (default 1 hour)
-    AUTO_BAN_WINDOW = int(os.getenv("AUTO_BAN_WINDOW", "300"))  # Window to track violations (default 5 minutes)
-    AUTO_BAN_PREFIX = os.getenv("AUTO_BAN_PREFIX", "ban")
-    AUTO_BAN_VIOLATIONS_PREFIX = os.getenv("AUTO_BAN_VIOLATIONS_PREFIX", "violations")
+    AUTO_BAN_ENABLED = get_secret("AUTO_BAN_ENABLED", "secret/app/flask", "auto_ban_enabled").lower() == "true"
+    AUTO_BAN_VIOLATIONS_THRESHOLD = int(get_secret("AUTO_BAN_VIOLATIONS_THRESHOLD", "secret/app/flask", "auto_ban_violations_threshold") or "5")  # Number of violations before ban
+    AUTO_BAN_DURATION = int(get_secret("AUTO_BAN_DURATION", "secret/app/flask", "auto_ban_duration") or "3600")  # Ban duration in seconds (default 1 hour)
+    AUTO_BAN_WINDOW = int(get_secret("AUTO_BAN_WINDOW", "secret/app/flask", "auto_ban_window") or "300")  # Window to track violations (default 5 minutes)
+    AUTO_BAN_PREFIX = get_secret("AUTO_BAN_PREFIX", "secret/app/flask", "auto_ban_prefix") or "ban"
+    AUTO_BAN_VIOLATIONS_PREFIX = get_secret("AUTO_BAN_VIOLATIONS_PREFIX", "secret/app/flask", "auto_ban_violations_prefix") or "violations"
 
     # WebSocket Configuration
     WS_MAX_MESSAGE_SIZE = 1024 * 1024  # 1MB default max message size
@@ -144,7 +167,7 @@ class Config:
     WS_SESSION_TTL = 3600  # 1 hour
     WS_ROOM_SIZE_LIMIT = 2
     WS_ROOM_SIZE_CHECK_INTERVAL = 300  # 5 minutes
-    WS_ALLOWED_ORIGINS = ['http://localhost:5000', 'http://localhost:3000']
+    WS_ALLOWED_ORIGINS = get_secret("WS_ALLOWED_ORIGINS", "secret/app/flask", "allowed_origins").split(",") or ['http://localhost:5000', 'http://localhost:3000']
 
     # Presence Tracking Configuration
     WS_PRESENCE_CHECK_INTERVAL = 30  # seconds between presence checks
@@ -166,29 +189,29 @@ class Config:
     WS_MAX_OBJECT_SIZE = 100  # Maximum number of properties in objects
 
     # Credit Amount Validation Settings
-    CREDIT_MIN_AMOUNT = float(os.getenv("CREDIT_MIN_AMOUNT", "0.01"))  # Minimum credit amount
-    CREDIT_MAX_AMOUNT = float(os.getenv("CREDIT_MAX_AMOUNT", "1000000.0"))  # Maximum credit amount
-    CREDIT_PRECISION = int(os.getenv("CREDIT_PRECISION", "2"))  # Number of decimal places allowed
-    CREDIT_ALLOW_NEGATIVE = os.getenv("CREDIT_ALLOW_NEGATIVE", "false").lower() == "true"  # Whether negative amounts are allowed
+    CREDIT_MIN_AMOUNT = float(get_secret("CREDIT_MIN_AMOUNT", "secret/app/flask", "credit_min_amount") or "0.01")  # Minimum credit amount
+    CREDIT_MAX_AMOUNT = float(get_secret("CREDIT_MAX_AMOUNT", "secret/app/flask", "credit_max_amount") or "1000000.0")  # Maximum credit amount
+    CREDIT_PRECISION = int(get_secret("CREDIT_PRECISION", "secret/app/flask", "credit_precision") or "2")  # Number of decimal places allowed
+    CREDIT_ALLOW_NEGATIVE = get_secret("CREDIT_ALLOW_NEGATIVE", "secret/app/flask", "credit_allow_negative").lower() == "true"  # Whether negative amounts are allowed
 
     # Transaction Validation Settings
-    MAX_METADATA_SIZE = int(os.getenv("MAX_METADATA_SIZE", "1024"))  # Maximum metadata size in bytes
-    MAX_REFERENCE_ID_LENGTH = int(os.getenv("MAX_REFERENCE_ID_LENGTH", "64"))  # Maximum reference ID length
-    ALLOWED_TRANSACTION_TYPES = os.getenv("ALLOWED_TRANSACTION_TYPES", "purchase,reward,burn,transfer,refund").split(",")
+    MAX_METADATA_SIZE = int(get_secret("MAX_METADATA_SIZE", "secret/app/flask", "max_metadata_size") or "1024")  # Maximum metadata size in bytes
+    MAX_REFERENCE_ID_LENGTH = int(get_secret("MAX_REFERENCE_ID_LENGTH", "secret/app/flask", "max_reference_id_length") or "64")  # Maximum reference ID length
+    ALLOWED_TRANSACTION_TYPES = get_secret("ALLOWED_TRANSACTION_TYPES", "secret/app/flask", "allowed_transaction_types").split(",") or "purchase,reward,burn,transfer,refund"
 
     # Transaction Integrity Settings
-    TRANSACTION_WINDOW = int(os.getenv("TRANSACTION_WINDOW", "3600"))  # Time window for replay attack prevention (in seconds)
-    REQUIRE_TRANSACTION_ID = os.getenv("REQUIRE_TRANSACTION_ID", "true").lower() == "true"  # Whether transaction IDs are required
-    ENFORCE_BALANCE_VALIDATION = os.getenv("ENFORCE_BALANCE_VALIDATION", "true").lower() == "true"  # Whether to enforce balance validation
+    TRANSACTION_WINDOW = int(get_secret("TRANSACTION_WINDOW", "secret/app/flask", "transaction_window") or "3600")  # Time window for replay attack prevention (in seconds)
+    REQUIRE_TRANSACTION_ID = get_secret("REQUIRE_TRANSACTION_ID", "secret/app/flask", "require_transaction_id").lower() == "true"  # Whether transaction IDs are required
+    ENFORCE_BALANCE_VALIDATION = get_secret("ENFORCE_BALANCE_VALIDATION", "secret/app/flask", "enforce_balance_validation").lower() == "true"  # Whether to enforce balance validation
 
     # Payload Validation Settings
-    MAX_PAYLOAD_SIZE = int(os.getenv("MAX_PAYLOAD_SIZE", "1048576"))  # 1MB default
-    MAX_NESTING_DEPTH = int(os.getenv("MAX_NESTING_DEPTH", "10"))  # Maximum nesting depth
-    MAX_ARRAY_SIZE = int(os.getenv("MAX_ARRAY_SIZE", "1000"))  # Maximum array size
-    MAX_STRING_LENGTH = int(os.getenv("MAX_STRING_LENGTH", "65536"))  # Maximum string length
+    MAX_PAYLOAD_SIZE = int(get_secret("MAX_PAYLOAD_SIZE", "secret/app/flask", "max_payload_size") or "1048576")  # 1MB default
+    MAX_NESTING_DEPTH = int(get_secret("MAX_NESTING_DEPTH", "secret/app/flask", "max_nesting_depth") or "10")  # Maximum nesting depth
+    MAX_ARRAY_SIZE = int(get_secret("MAX_ARRAY_SIZE", "secret/app/flask", "max_array_size") or "1000")  # Maximum array size
+    MAX_STRING_LENGTH = int(get_secret("MAX_STRING_LENGTH", "secret/app/flask", "max_string_length") or "65536")  # Maximum string length
 
     # Encryption settings
-    ENCRYPTION_SALT = os.getenv("ENCRYPTION_SALT", "default_salt_123")  # Should be changed in production
+    ENCRYPTION_SALT = get_secret("ENCRYPTION_SALT", "secret/app/flask", "encryption_salt") or "default_salt_123"  # Should be changed in production
     SENSITIVE_FIELDS = [
         "user_id",
         "email",
@@ -199,8 +222,8 @@ class Config:
     ]
 
     # MongoDB Configuration
-    MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
-    MONGODB_AUTH_SOURCE = os.getenv("MONGODB_AUTH_SOURCE", "admin")
+    MONGODB_URI = get_secret("MONGODB_URI", "secret/app/flask", "mongodb_uri") or "mongodb://localhost:27017/"
+    MONGODB_AUTH_SOURCE = get_secret("MONGODB_AUTH_SOURCE", "secret/app/flask", "mongodb_auth_source") or "admin"
     
     # MongoDB Role-Based Access Control
     MONGODB_ROLES = {
@@ -210,21 +233,21 @@ class Config:
     }
     
     # MongoDB Replica Set Configuration
-    MONGODB_REPLICA_SET = os.getenv("MONGODB_REPLICA_SET", "")
-    MONGODB_READ_PREFERENCE = os.getenv("MONGODB_READ_PREFERENCE", "primary")
-    MONGODB_READ_CONCERN = os.getenv("MONGODB_READ_CONCERN", "majority")
-    MONGODB_WRITE_CONCERN = os.getenv("MONGODB_WRITE_CONCERN", "majority")
+    MONGODB_REPLICA_SET = get_secret("MONGODB_REPLICA_SET", "secret/app/flask", "mongodb_replica_set") or ""
+    MONGODB_READ_PREFERENCE = get_secret("MONGODB_READ_PREFERENCE", "secret/app/flask", "mongodb_read_preference") or "primary"
+    MONGODB_READ_CONCERN = get_secret("MONGODB_READ_CONCERN", "secret/app/flask", "mongodb_read_concern") or "majority"
+    MONGODB_WRITE_CONCERN = get_secret("MONGODB_WRITE_CONCERN", "secret/app/flask", "mongodb_write_concern") or "majority"
     
     # MongoDB Connection Settings
-    MONGODB_MAX_POOL_SIZE = int(os.getenv("MONGODB_MAX_POOL_SIZE", "100"))
-    MONGODB_MIN_POOL_SIZE = int(os.getenv("MONGODB_MIN_POOL_SIZE", "10"))
-    MONGODB_MAX_IDLE_TIME_MS = int(os.getenv("MONGODB_MAX_IDLE_TIME_MS", "60000"))
-    MONGODB_SOCKET_TIMEOUT_MS = int(os.getenv("MONGODB_SOCKET_TIMEOUT_MS", "5000"))
-    MONGODB_CONNECT_TIMEOUT_MS = int(os.getenv("MONGODB_CONNECT_TIMEOUT_MS", "5000"))
+    MONGODB_MAX_POOL_SIZE = int(get_secret("MONGODB_MAX_POOL_SIZE", "secret/app/flask", "mongodb_max_pool_size") or "100")
+    MONGODB_MIN_POOL_SIZE = int(get_secret("MONGODB_MIN_POOL_SIZE", "secret/app/flask", "mongodb_min_pool_size") or "10")
+    MONGODB_MAX_IDLE_TIME_MS = int(get_secret("MONGODB_MAX_IDLE_TIME_MS", "secret/app/flask", "mongodb_max_idle_time_ms") or "60000")
+    MONGODB_SOCKET_TIMEOUT_MS = int(get_secret("MONGODB_SOCKET_TIMEOUT_MS", "secret/app/flask", "mongodb_socket_timeout_ms") or "5000")
+    MONGODB_CONNECT_TIMEOUT_MS = int(get_secret("MONGODB_CONNECT_TIMEOUT_MS", "secret/app/flask", "mongodb_connect_timeout_ms") or "5000")
     
     # MongoDB SSL/TLS Settings
-    MONGODB_SSL = os.getenv("MONGODB_SSL", "false").lower() == "true"
-    MONGODB_SSL_CA_FILE = os.getenv("MONGODB_SSL_CA_FILE", "")
-    MONGODB_SSL_CERT_FILE = os.getenv("MONGODB_SSL_CERT_FILE", "")
-    MONGODB_SSL_KEY_FILE = os.getenv("MONGODB_SSL_KEY_FILE", "")
-    MONGODB_SSL_ALLOW_INVALID_CERTIFICATES = os.getenv("MONGODB_SSL_ALLOW_INVALID_CERTIFICATES", "false").lower() == "true"
+    MONGODB_SSL = get_secret("MONGODB_SSL", "secret/app/flask", "mongodb_ssl").lower() == "true"
+    MONGODB_SSL_CA_FILE = get_secret("MONGODB_SSL_CA_FILE", "secret/app/flask", "mongodb_ssl_ca_file") or ""
+    MONGODB_SSL_CERT_FILE = get_secret("MONGODB_SSL_CERT_FILE", "secret/app/flask", "mongodb_ssl_cert_file") or ""
+    MONGODB_SSL_KEY_FILE = get_secret("MONGODB_SSL_KEY_FILE", "secret/app/flask", "mongodb_ssl_key_file") or ""
+    MONGODB_SSL_ALLOW_INVALID_CERTIFICATES = get_secret("MONGODB_SSL_ALLOW_INVALID_CERTIFICATES", "secret/app/flask", "mongodb_ssl_allow_invalid_certificates").lower() == "true"
