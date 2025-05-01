@@ -1,6 +1,34 @@
 import os
 
+# Helper to read secrets from files (returns None if not found)
+def read_secret_file(secret_name: str) -> str:
+    path = f"/run/secrets/{secret_name}"
+    try:
+        with open(path, 'r') as f:
+            return f.read().strip()
+    except Exception:
+        return None
+
 class Config:
+    # Flask Configuration
+    FLASK_SERVICE_NAME = read_secret_file("flask_service_name") or os.getenv("FLASK_SERVICE_NAME", "flask")
+    FLASK_PORT = int(read_secret_file("flask_port") or os.getenv("FLASK_PORT", "5000"))
+    PYTHONPATH = read_secret_file("pythonpath") or os.getenv("PYTHONPATH", "/app")
+
+    # MongoDB Configuration
+    MONGODB_SERVICE_NAME = read_secret_file("mongodb_service_name") or os.getenv("MONGODB_SERVICE_NAME", "mongodb")
+    MONGODB_ROOT_USER = read_secret_file("mongodb_root_user") or os.getenv("MONGODB_ROOT_USER", "root")
+    MONGODB_ROOT_PASSWORD = read_secret_file("mongodb_root_password") or os.getenv("MONGODB_ROOT_PASSWORD", "rootpassword")
+    MONGODB_USER = read_secret_file("mongodb_user") or os.getenv("MONGODB_USER", "credit_system_user")
+    MONGODB_PASSWORD = read_secret_file("mongodb_user_password") or os.getenv("MONGODB_PASSWORD", "credit_system_password")
+    MONGODB_DB_NAME = read_secret_file("mongodb_db_name") or os.getenv("MONGODB_DB_NAME", "credit_system")
+    MONGODB_PORT = int(read_secret_file("mongodb_port") or os.getenv("MONGODB_PORT", "27017"))
+
+    # Redis Configuration
+    REDIS_SERVICE_NAME = read_secret_file("redis_service_name") or os.getenv("REDIS_SERVICE_NAME", "redis")
+    REDIS_HOST = read_secret_file("redis_host") or os.getenv("REDIS_HOST", "redis")
+    REDIS_PORT = int(read_secret_file("redis_port") or os.getenv("REDIS_PORT", "6379"))
+
     # Debug mode
     DEBUG = os.getenv("FLASK_DEBUG", "False").lower() in ("true", "1")
 
@@ -172,11 +200,6 @@ class Config:
 
     # MongoDB Configuration
     MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
-    MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "credit_system")
-    
-    # MongoDB Authentication
-    MONGODB_USERNAME = os.getenv("MONGODB_USERNAME", "")
-    MONGODB_PASSWORD = os.getenv("MONGODB_PASSWORD", "")
     MONGODB_AUTH_SOURCE = os.getenv("MONGODB_AUTH_SOURCE", "admin")
     
     # MongoDB Role-Based Access Control

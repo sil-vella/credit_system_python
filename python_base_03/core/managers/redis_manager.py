@@ -13,6 +13,14 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from datetime import datetime
 
+# Helper to read secrets from files
+def read_secret_file(path: str) -> Optional[str]:
+    try:
+        with open(path, 'r') as f:
+            return f.read().strip()
+    except Exception:
+        return None
+
 class RedisManager:
     _instance = None
     _initialized = False
@@ -35,34 +43,40 @@ class RedisManager:
     def _setup_encryption(self):
         """Set up encryption key using PBKDF2."""
         # Use Redis password as salt for key derivation
-        salt = os.getenv("REDIS_PASSWORD", "").encode()
+        redis_password = self._get_redis_password()
+        salt = redis_password.encode()
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
             iterations=100000,
         )
-        key = base64.urlsafe_b64encode(kdf.derive(os.getenv("REDIS_PASSWORD", "").encode()))
+        key = base64.urlsafe_b64encode(kdf.derive(redis_password.encode()))
         self.cipher_suite = Fernet(key)
+
+    def _get_redis_password(self):
+        """Get Redis password from environment or password file."""
+        redis_password = ""
+        redis_password_file = os.getenv("REDIS_PASSWORD_FILE")
+        if redis_password_file:
+            try:
+                with open(redis_password_file, 'r') as f:
+                    redis_password = f.read().strip()
+            except Exception as e:
+                custom_log(f"❌ Error reading Redis password file: {e}")
+                redis_password = os.getenv("REDIS_PASSWORD", "")
+        else:
+            redis_password = os.getenv("REDIS_PASSWORD", "")
+        return redis_password
 
     def _initialize_connection_pool(self):
         """Initialize Redis connection pool with security settings."""
         try:
-            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-            
-            # Get Redis password from file if specified
-            redis_password = ""
-            redis_password_file = os.getenv("REDIS_PASSWORD_FILE")
-            if redis_password_file and os.path.exists(redis_password_file):
-                with open(redis_password_file, 'r') as f:
-                    redis_password = f.read().strip()
-            else:
-                redis_password = os.getenv("REDIS_PASSWORD", "")
-            
-            # Parse Redis URL to get host and port
-            redis_host = os.getenv("REDIS_HOST", "localhost")
-            redis_port = int(os.getenv("REDIS_PORT", "6379"))
-            
+            # Read host and port from secrets if available, else env, else default
+            redis_host = read_secret_file('/run/secrets/redis_host') or os.getenv("REDIS_HOST", "localhost")
+            redis_port = int(read_secret_file('/run/secrets/redis_port') or os.getenv("REDIS_PORT", "6379"))
+            redis_password = self._get_redis_password()
+
             # Base connection pool settings
             pool_settings = {
                 'host': redis_host,
@@ -87,7 +101,7 @@ class RedisManager:
             # Test connection
             self.redis = redis.Redis(connection_pool=self.connection_pool)
             self.redis.ping()
-            custom_log("✅ Redis connection pool initialized successfully")
+            custom_log(f"✅ Redis connection pool initialized successfully (host={redis_host}, port={redis_port})")
         except Exception as e:
             custom_log(f"❌ Error initializing Redis connection pool: {e}")
             raise

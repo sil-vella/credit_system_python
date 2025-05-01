@@ -82,19 +82,91 @@ This checklist is designed to ensure your external Credit System is secure, resi
 
 ## ⚠️ Monitoring & Alerting
 
+### Current Implementation
 - [✅] Track metrics:
   - Rate limit hits
   - Remaining requests
   - Redis errors
   - Database performance
   - Role-based access events
-- [❌] Alert on:
-  - Spike in minting or spending
-  - Unusual wallet activity
-  - Blockchain desyncs
-  - Database replication lag
-  - Failed backup attempts
-- [❌] Integrate with observability stack (Grafana, Datadog, etc.)
+
+### Implementation Plan
+
+#### 1. Metrics Collection Layer
+- [❌] Centralized metrics collection using Prometheus
+- [❌] Business metrics tracking
+- [❌] System metrics monitoring
+- [❌] API performance metrics
+- [❌] Custom metrics for credit system
+
+#### 2. Alerting System
+- [❌] Alert rules configuration
+- [❌] Notification channels setup
+- [❌] Alert severity levels
+- [❌] Alert aggregation and deduplication
+- [❌] Alert history and management
+
+#### 3. Health Check System
+- [❌] Service health checks
+- [❌] Database health monitoring
+- [❌] Cache health monitoring
+- [❌] API health endpoints
+- [❌] Overall system health status
+
+#### 4. Visualization & Dashboard
+- [❌] Grafana dashboard setup
+- [❌] Custom dashboards for:
+  - API performance
+  - Business metrics
+  - System health
+  - Alert status
+- [❌] Real-time monitoring views
+
+#### 5. Metrics to Track
+- [❌] API Metrics:
+  - Request latency
+  - Error rates
+  - Request volume
+  - Rate limit hits
+  
+- [❌] Business Metrics:
+  - Credit transaction volume
+  - User activity patterns
+  - Failed transactions
+  - Credit balance changes
+  
+- [❌] System Metrics:
+  - MongoDB performance
+  - Redis cache hit rates
+  - Memory usage
+  - CPU utilization
+  - Network I/O
+
+#### 6. Alert Rules
+- [❌] High error rates (>5% for 5 minutes)
+- [❌] Slow response times (>1s for 1 minute)
+- [❌] High rate limit hits
+- [❌] Service health check failures
+- [❌] Unusual credit transaction patterns
+- [❌] Database replication lag
+- [❌] Cache miss rates
+
+#### 7. Infrastructure
+- [❌] Prometheus server setup
+- [❌] AlertManager configuration
+- [❌] Grafana setup
+- [❌] Docker integration
+- [❌] Service discovery
+
+### Next Steps
+1. Set up Prometheus server and basic metrics collection
+2. Implement core metrics tracking in the application
+3. Configure AlertManager with basic alert rules
+4. Create initial Grafana dashboards
+5. Implement health check system
+6. Add business-specific metrics
+7. Set up notification channels
+8. Configure advanced alerting rules
 
 ---
 

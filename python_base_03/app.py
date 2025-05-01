@@ -3,6 +3,7 @@ from flask_cors import CORS
 from core.managers.app_manager import AppManager
 import sys
 import os
+from core.metrics import init_metrics
 
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
@@ -18,6 +19,9 @@ CORS(app)
 
 # Initialize the AppManager and pass the app for plugin registration
 app_manager.initialize(app)
+
+# Initialize metrics
+metrics = init_metrics(app)
 
 # Additional app-level configurations
 app.config["DEBUG"] = True

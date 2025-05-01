@@ -1,7 +1,7 @@
-// Create the main database
-db = db.getSiblingDB(process.env.MONGO_INITDB_DATABASE);
+// Switch to admin database first
+db = db.getSiblingDB('admin');
 
-// Create application user with read-write access
+// Create application user with proper roles
 db.createUser({
     user: process.env.MONGODB_USER,
     pwd: process.env.MONGODB_PASSWORD,
@@ -9,21 +9,16 @@ db.createUser({
         {
             role: "readWrite",
             db: process.env.MONGO_INITDB_DATABASE
-        }
-    ]
-});
-
-// Create analytics user with read-only access
-db.createUser({
-    user: process.env.MONGODB_ANALYTICS_USER,
-    pwd: process.env.MONGODB_ANALYTICS_PASSWORD,
-    roles: [
+        },
         {
-            role: "read",
+            role: "dbAdmin",
             db: process.env.MONGO_INITDB_DATABASE
         }
     ]
 });
+
+// Switch to application database
+db = db.getSiblingDB(process.env.MONGO_INITDB_DATABASE);
 
 // Create collections and indexes
 db.createCollection("users");
@@ -42,7 +37,6 @@ db.user_tokens.createIndex({ "access_token": 1 }, { unique: true });
 db.user_tokens.createIndex({ "refresh_token": 1 }, { unique: true });
 db.user_tokens.createIndex({ "expires_at": 1 });
 
-// Create audit collection for tracking changes
 db.createCollection("audit_logs");
 db.audit_logs.createIndex({ "timestamp": 1 });
 db.audit_logs.createIndex({ "user_id": 1 });

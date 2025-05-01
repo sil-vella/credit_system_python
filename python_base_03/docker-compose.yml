@@ -1,10 +1,32 @@
 version: "3.9"
 
 secrets:
+  mongodb_service_name:
+    file: ./secrets/mongodb_service_name
+  mongodb_root_user:
+    file: ./secrets/mongodb_root_user
   mongodb_root_password:
     file: ./secrets/mongodb_root_password
+  mongodb_user:
+    file: ./secrets/mongodb_user
   mongodb_user_password:
     file: ./secrets/mongodb_user_password
+  mongodb_db_name:
+    file: ./secrets/mongodb_db_name
+  mongodb_port:
+    file: ./secrets/mongodb_port
+  redis_service_name:
+    file: ./secrets/redis_service_name
+  redis_host:
+    file: ./secrets/redis_host
+  redis_port:
+    file: ./secrets/redis_port
+  flask_service_name:
+    file: ./secrets/flask_service_name
+  flask_port:
+    file: ./secrets/flask_port
+  pythonpath:
+    file: ./secrets/pythonpath
   app_secret_key:
     file: ./secrets/app_secret_key
   jwt_secret_key:
@@ -15,6 +37,8 @@ secrets:
     file: ./secrets/redis_password
   stripe_secret_key:
     file: ./secrets/stripe_secret_key
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password
 
 services:
   flask_app:
@@ -22,22 +46,28 @@ services:
       context: .
       dockerfile: Dockerfile
     image: silvella/cr_credit_system_flask_app:latest
-    container_name: ${FLASK_SERVICE_NAME}
+    container_name: flask
     environment:
-      - PYTHONPATH=${PYTHONPATH}
-      - MONGODB_URI=mongodb://${MONGODB_USER}:${MONGODB_PASSWORD}@mongodb:27017/${MONGODB_DB_NAME}?authSource=admin
-      - MONGODB_DB_NAME=${MONGODB_DB_NAME}
-      - MONGODB_USER=${MONGODB_USER}
+      - PYTHONPATH_FILE=/run/secrets/pythonpath
+      - MONGODB_SERVICE_NAME_FILE=/run/secrets/mongodb_service_name
+      - MONGODB_ROOT_USER_FILE=/run/secrets/mongodb_root_user
+      - MONGODB_ROOT_PASSWORD_FILE=/run/secrets/mongodb_root_password
+      - MONGODB_USER_FILE=/run/secrets/mongodb_user
       - MONGODB_PASSWORD_FILE=/run/secrets/mongodb_user_password
-      - REDIS_HOST=${REDIS_HOST}
-      - REDIS_PORT=${REDIS_PORT}
-      - REDIS_PASSWORD_FILE=/run/secrets/redis_password
+      - MONGODB_DB_NAME_FILE=/run/secrets/mongodb_db_name
+      - MONGODB_PORT_FILE=/run/secrets/mongodb_port
+      - REDIS_SERVICE_NAME_FILE=/run/secrets/redis_service_name
+      - REDIS_HOST_FILE=/run/secrets/redis_host
+      - REDIS_PORT_FILE=/run/secrets/redis_port
+      - FLASK_SERVICE_NAME_FILE=/run/secrets/flask_service_name
+      - FLASK_PORT_FILE=/run/secrets/flask_port
       - APP_SECRET_KEY_FILE=/run/secrets/app_secret_key
       - JWT_SECRET_KEY_FILE=/run/secrets/jwt_secret_key
       - ENCRYPTION_KEY_FILE=/run/secrets/encryption_key
+      - REDIS_PASSWORD_FILE=/run/secrets/redis_password
       - STRIPE_SECRET_KEY_FILE=/run/secrets/stripe_secret_key
     ports:
-      - "${FLASK_PORT}:${FLASK_PORT}"
+      - "5000:5000"
     volumes:
       - ./plugins:/app/plugins
       - ./core:/app/core
@@ -45,7 +75,19 @@ services:
       - ./tools:/app/tools
       - ./utils:/app/utils
     secrets:
+      - mongodb_service_name
+      - mongodb_root_user
+      - mongodb_root_password
+      - mongodb_user
       - mongodb_user_password
+      - mongodb_db_name
+      - mongodb_port
+      - redis_service_name
+      - redis_host
+      - redis_port
+      - flask_service_name
+      - flask_port
+      - pythonpath
       - app_secret_key
       - jwt_secret_key
       - encryption_key
@@ -64,72 +106,85 @@ services:
       sh -c "
       pip install --no-cache-dir -r /app/requirements.txt &&
       pip install --no-cache-dir gevent &&
-      gunicorn -b 0.0.0.0:${FLASK_PORT} --worker-class gevent app:app
+      gunicorn -b 0.0.0.0:5000 --worker-class gevent app:app
       "
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${FLASK_PORT}"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000"]
       interval: 10s
       retries: 5
       start_period: 10s
 
   init-secrets:
-    image: alpine
+    image: alpine:latest
     volumes:
-      - app_secrets:/secrets
+      - ./secrets:/secrets
     command: >
       sh -c "
-        [ ! -f /secrets/app_secret_key ] && head -c32 /dev/urandom | xxd -p > /secrets/app_secret_key;
-        [ ! -f /secrets/jwt_secret_key ] && head -c32 /dev/urandom | xxd -p > /secrets/jwt_secret_key;
-        [ ! -f /secrets/encryption_key ] && head -c32 /dev/urandom | xxd -p > /secrets/encryption_key;
-        [ ! -f /secrets/mongodb_root_password ] && head -c32 /dev/urandom | xxd -p > /secrets/mongodb_root_password;
-        [ ! -f /secrets/mongodb_user_password ] && head -c32 /dev/urandom | xxd -p > /secrets/mongodb_user_password;
-        [ ! -f /secrets/redis_password ] && head -c32 /dev/urandom | xxd -p > /secrets/redis_password;
-        chmod 400 /secrets/*
+        chmod 600 /secrets/* &&
+        echo 'Secrets initialized successfully' &&
+        exit 0
       "
+    networks:
+      - cr_credit_system_network
 
   mongodb:
     image: mongo:latest
-    container_name: ${MONGODB_SERVICE_NAME}
+    container_name: mongodb
+    restart: always
     environment:
-      - MONGO_INITDB_ROOT_USERNAME=${MONGODB_ROOT_USER}
-      - MONGO_INITDB_ROOT_PASSWORD_FILE=/run/secrets/mongodb_root_password
-      - MONGO_INITDB_DATABASE=${MONGODB_DB_NAME}
+      MONGO_INITDB_ROOT_USERNAME_FILE: /run/secrets/mongodb_root_user
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongodb_root_password
+      MONGO_INITDB_DATABASE_FILE: /run/secrets/mongodb_db_name
+      MONGODB_USER_FILE: /run/secrets/mongodb_user
+      MONGODB_PASSWORD_FILE: /run/secrets/mongodb_user_password
+      MONGODB_PORT_FILE: /run/secrets/mongodb_port
     volumes:
       - cr_credit_system_mongodb_data:/data/db
-      - ./init-scripts/mongodb-init.js:/docker-entrypoint-initdb.d/mongodb-init.js:ro
+      - ./init-scripts:/docker-entrypoint-initdb.d:ro
+      - ./secrets:/run/secrets:ro
     secrets:
+      - mongodb_root_user
       - mongodb_root_password
+      - mongodb_user
+      - mongodb_user_password
+      - mongodb_db_name
+      - mongodb_port
+    ports:
+      - "27017:27017"
     networks:
       - cr_credit_system_network
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 5s
+      test: ["CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
-    restart: unless-stopped
+      start_period: 30s
+    command: ["mongod", "--auth", "--bind_ip_all"]
 
   redis:
-    image: redis:latest
-    container_name: ${REDIS_SERVICE_NAME}
+    image: redis:alpine
+    container_name: redis
+    restart: always
+    depends_on:
+      - init-secrets
+    command: sh -c 'redis-server --requirepass "$$(cat /run/secrets/redis_password)"'
     volumes:
       - cr_credit_system_redis_data:/data
-      - ./redis.conf:/usr/local/etc/redis/redis.conf.template:ro
+      - ./secrets:/run/secrets:ro
     secrets:
       - redis_password
+      - redis_service_name
+      - redis_host
+      - redis_port
+    ports:
+      - "6379:6379"
     networks:
       - cr_credit_system_network
     healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
-      interval: 5s
+      test: ["CMD", "redis-cli", "-a", "$$(cat /run/secrets/redis_password)", "ping"]
+      interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 10s
-    command: >
-      sh -c "
-        REDIS_PASSWORD=$$(cat /run/secrets/redis_password) && \
-        sed \"s/__REDIS_PASSWORD_PLACEHOLDER__/$${REDIS_PASSWORD}/\" /usr/local/etc/redis/redis.conf.template > /tmp/redis.conf && \
-        redis-server /tmp/redis.conf
-      "
 
   nginx:
     image: nginx:latest
@@ -143,6 +198,71 @@ services:
     networks:
       - cr_credit_system_network
 
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cr_credit_system_prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - cr_credit_system_network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: cr_credit_system_grafana
+    restart: always
+    depends_on:
+      - init-secrets
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD_FILE=/run/secrets/grafana_admin_password
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./secrets:/run/secrets:ro
+    secrets:
+      - grafana_admin_password
+    ports:
+      - "3000:3000"
+    networks:
+      - cr_credit_system_network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: cr_credit_system_alertmanager
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - alertmanager_data:/alertmanager
+    ports:
+      - "9093:9093"
+    networks:
+      - cr_credit_system_network
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 networks:
   cr_credit_system_network:
     name: cr_credit_system_network
@@ -155,3 +275,9 @@ volumes:
     name: cr_credit_system_redis_data
   cr_credit_system_mongodb_data:
     name: cr_credit_system_mongodb_data
+  prometheus_data:
+    name: cr_credit_system_prometheus_data
+  grafana_data:
+    name: cr_credit_system_grafana_data
+  alertmanager_data:
+    name: cr_credit_system_alertmanager_data

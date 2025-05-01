@@ -4,7 +4,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import base64
 import os
 from typing import Any, Dict, Optional
-from ..utils.config.config import Config
+from utils.config.config import Config
 
 class EncryptionManager:
     """Manager for handling data encryption at rest."""
@@ -20,10 +20,19 @@ class EncryptionManager:
     
     def _initialize_fernet(self) -> None:
         """Initialize the Fernet encryption instance."""
-        # Get encryption key from environment
+        # Try to get encryption key from environment or file
         key = os.getenv('ENCRYPTION_KEY')
+        key_file = os.getenv('ENCRYPTION_KEY_FILE')
+        
+        if key_file and os.path.exists(key_file):
+            try:
+                with open(key_file, 'r') as f:
+                    key = f.read().strip()
+            except Exception as e:
+                raise RuntimeError(f"Failed to read encryption key from file: {e}")
+        
         if not key:
-            raise RuntimeError("ENCRYPTION_KEY environment variable is required")
+            raise RuntimeError("ENCRYPTION_KEY environment variable or ENCRYPTION_KEY_FILE is required")
         
         # Derive encryption key using PBKDF2
         kdf = PBKDF2HMAC(

@@ -1,73 +1,59 @@
 #!/bin/bash
 set -e
 
-# Wait for PostgreSQL to be ready
-until pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"; do
-  echo "Waiting for PostgreSQL to be ready..."
+# Read secrets from files
+MONGO_INITDB_ROOT_USERNAME=$(cat /run/secrets/mongodb_root_user)
+MONGO_INITDB_ROOT_PASSWORD=$(cat /run/secrets/mongodb_root_password)
+MONGO_INITDB_DATABASE=$(cat /run/secrets/mongodb_db_name)
+MONGODB_USER=$(cat /run/secrets/mongodb_user)
+MONGODB_PASSWORD=$(cat /run/secrets/mongodb_user_password)
+MONGODB_PORT=$(cat /run/secrets/mongodb_port)
+
+# Wait for MongoDB to be ready
+until mongosh --port $MONGODB_PORT --eval "db.adminCommand('ping')" > /dev/null 2>&1; do
+  echo "Waiting for MongoDB to be ready..."
   sleep 1
 done
 
-# Create the database and set up initial configuration
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
-    -- Create extensions
-    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-    
-    -- Set up permissions
-    ALTER DATABASE $POSTGRES_DB SET search_path TO public;
-    
-    -- Create schema if not exists
-    CREATE SCHEMA IF NOT EXISTS credit_system;
-    
-    -- Set up search path
-    ALTER DATABASE $POSTGRES_DB SET search_path TO credit_system, public;
-    
-    -- Grant necessary permissions
-    GRANT ALL ON SCHEMA credit_system TO $POSTGRES_USER;
-    GRANT ALL ON ALL TABLES IN SCHEMA credit_system TO $POSTGRES_USER;
-    GRANT ALL ON ALL SEQUENCES IN SCHEMA credit_system TO $POSTGRES_USER;
-    
-    -- Create initial tables
-    CREATE TABLE IF NOT EXISTS credit_system.transactions (
-        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-        from_user_id UUID NOT NULL,
-        to_user_id UUID NOT NULL,
-        amount DECIMAL(20,8) NOT NULL,
-        transaction_type VARCHAR(50) NOT NULL,
-        metadata JSONB,
-        reference_id VARCHAR(100),
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-    );
-    
-    CREATE TABLE IF NOT EXISTS credit_system.wallets (
-        user_id UUID PRIMARY KEY,
-        balance DECIMAL(20,8) NOT NULL DEFAULT 0,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-    );
-    
-    -- Create indexes
-    CREATE INDEX IF NOT EXISTS idx_transactions_from_user_id ON credit_system.transactions(from_user_id);
-    CREATE INDEX IF NOT EXISTS idx_transactions_to_user_id ON credit_system.transactions(to_user_id);
-    CREATE INDEX IF NOT EXISTS idx_transactions_reference_id ON credit_system.transactions(reference_id);
-    
-    -- Create function to update updated_at timestamp
-    CREATE OR REPLACE FUNCTION credit_system.update_updated_at_column()
-    RETURNS TRIGGER AS \$\$
-    BEGIN
-        NEW.updated_at = CURRENT_TIMESTAMP;
-        RETURN NEW;
-    END;
-    \$\$ language 'plpgsql';
-    
-    -- Create triggers for updated_at
-    CREATE TRIGGER update_transactions_updated_at
-        BEFORE UPDATE ON credit_system.transactions
-        FOR EACH ROW
-        EXECUTE FUNCTION credit_system.update_updated_at_column();
-    
-    CREATE TRIGGER update_wallets_updated_at
-        BEFORE UPDATE ON credit_system.wallets
-        FOR EACH ROW
-        EXECUTE FUNCTION credit_system.update_updated_at_column();
-EOSQL 
+# Initialize application database and users
+mongosh admin --port $MONGODB_PORT -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --eval "
+  db = db.getSiblingDB('admin');
+  
+  // Create application user if it doesn't exist
+  if (!db.getUser('$MONGODB_USER')) {
+    db.createUser({
+      user: '$MONGODB_USER',
+      pwd: '$MONGODB_PASSWORD',
+      roles: [
+        { role: 'readWrite', db: '$MONGO_INITDB_DATABASE' },
+        { role: 'readWrite', db: 'admin' }
+      ]
+    });
+  }
+
+  db = db.getSiblingDB('$MONGO_INITDB_DATABASE');
+  
+  // Create collections
+  db.createCollection('users');
+  db.createCollection('user_sessions');
+  db.createCollection('user_tokens');
+  db.createCollection('audit_logs');
+  
+  // Create indexes
+  db.users.createIndex({ 'email': 1 }, { unique: true });
+  db.users.createIndex({ 'username': 1 });
+  db.users.createIndex({ 'created_at': 1 });
+  
+  db.user_sessions.createIndex({ 'user_id': 1 });
+  db.user_sessions.createIndex({ 'session_id': 1 }, { unique: true });
+  db.user_sessions.createIndex({ 'created_at': 1 });
+  
+  db.user_tokens.createIndex({ 'user_id': 1 });
+  db.user_tokens.createIndex({ 'access_token': 1 }, { unique: true });
+  db.user_tokens.createIndex({ 'refresh_token': 1 }, { unique: true });
+  db.user_tokens.createIndex({ 'expires_at': 1 });
+  
+  db.audit_logs.createIndex({ 'timestamp': 1 });
+  db.audit_logs.createIndex({ 'user_id': 1 });
+  db.audit_logs.createIndex({ 'action': 1 });
+" 

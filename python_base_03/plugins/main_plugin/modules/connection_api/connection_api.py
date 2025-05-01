@@ -100,9 +100,9 @@ class ConnectionAPI:
             # Invalidate any cached user data
             self._invalidate_caches(f"user:{user_id}")
             custom_log(f"✅ User {user_id} and associated data deleted")
-            except Exception as e:
+        except Exception as e:
             self.logger.error(f"Error deleting user: {e}")
-                raise
+            raise
 
     def fetch_from_db(self, collection, query, as_dict=False):
         """Execute a query and cache results in Redis."""
@@ -170,13 +170,14 @@ class ConnectionAPI:
             # Invalidate user data cache if users collection
             if collection == "users":
                 pattern = "user:*"
-            keys = self.redis_manager.redis.keys(pattern)
-            for key in keys:
-                self.redis_manager.delete(key)
-        
-        custom_log("✅ Relevant caches invalidated")
+                keys = self.redis_manager.redis.keys(pattern)
+                for key in keys:
+                    self.redis_manager.delete(key)
+            
+            custom_log("✅ Relevant caches invalidated")
         except Exception as e:
             self.logger.error(f"Error invalidating caches: {e}")
+            raise
 
     def _create_session(self, user_id: int, username: str, email: str) -> dict:
         """Create a new session for a user."""

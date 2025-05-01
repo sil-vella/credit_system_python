@@ -11,6 +11,8 @@ from flask import request
 import time
 from utils.config.config import Config
 from redis.exceptions import RedisError
+from core.monitoring.metrics_collector import metrics_collector
+import logging
 
 
 class AppManager:
@@ -23,6 +25,10 @@ class AppManager:
         self.rate_limiter_manager = RateLimiterManager()
         self.template_dirs = []  # List to track template directories
         self.flask_app = None  # Flask app reference
+        self.logger = logging.getLogger(__name__)
+        self.scheduler = None
+        self.db_manager = None
+        self.redis_manager = None
 
         custom_log("AppManager instance created.")
 
@@ -54,6 +60,9 @@ class AppManager:
         # Initialize rate limiting middleware
         self._setup_rate_limiting()
         self._setup_rate_limit_headers()
+
+        # Set up monitoring middleware
+        self._setup_monitoring()
 
     def run(self, app, **kwargs):
         """Run the Flask application with WebSocket support."""
@@ -199,9 +208,9 @@ class AppManager:
         if not self.flask_app:
             return
 
-            @self.flask_app.after_request
-            def add_rate_limit_headers(response):
-                try:
+        @self.flask_app.after_request
+        def add_rate_limit_headers(response):
+            try:
                 if Config.RATE_LIMIT_HEADERS_ENABLED and hasattr(request, 'rate_limit_result'):
                     result = request.rate_limit_result
                     limit_types = ['ip']
@@ -210,15 +219,15 @@ class AppManager:
                     if self.rate_limiter_manager.config['api_key']['enabled']:
                         limit_types.append('api_key')
                     
-                        for limit_type in limit_types:
-                            if limit_type in result['remaining']:
-                                prefix = limit_type.upper()
-                                response.headers[f'X-RateLimit-{prefix}-Limit'] = str(self.rate_limiter_manager.config[limit_type]['requests'])
-                                response.headers[f'X-RateLimit-{prefix}-Remaining'] = str(result['remaining'][limit_type])
-                                response.headers[f'X-RateLimit-{prefix}-Reset'] = str(result['reset_time'][limit_type])
-                except Exception as e:
-                    custom_log(f"Error adding rate limit headers: {str(e)}", level="ERROR")
-                return response
+                    for limit_type in limit_types:
+                        if limit_type in result['remaining']:
+                            prefix = limit_type.upper()
+                            response.headers[f'X-RateLimit-{prefix}-Limit'] = str(self.rate_limiter_manager.config[limit_type]['requests'])
+                            response.headers[f'X-RateLimit-{prefix}-Remaining'] = str(result['remaining'][limit_type])
+                            response.headers[f'X-RateLimit-{prefix}-Reset'] = str(result['reset_time'][limit_type])
+            except Exception as e:
+                custom_log(f"Error adding rate limit headers: {str(e)}", level="ERROR")
+            return response
 
     @log_function_call
     def register_hook(self, hook_name):
@@ -252,3 +261,58 @@ class AppManager:
         """
         custom_log(f"Triggering hook '{hook_name}' with data: {data} and context: {context}.")
         self.hooks_manager.trigger_hook(hook_name, data, context)
+
+    def _setup_monitoring(self):
+        """Set up monitoring middleware for the Flask app."""
+        if not self.flask_app:
+            return
+            
+        @self.flask_app.before_request
+        def before_request():
+            request.start_time = time.time()
+            request.request_size = len(request.get_data())
+            
+        @self.flask_app.after_request
+        def after_request(response):
+            # Calculate request duration
+            duration = time.time() - request.start_time
+            
+            # Track request metrics
+            metrics_collector.track_request(
+                method=request.method,
+                endpoint=request.endpoint,
+                status=response.status_code,
+                duration=duration,
+                size=request.request_size
+            )
+            
+            return response
+            
+        # Set up periodic system metrics collection
+        self._setup_system_metrics()
+        
+    def _setup_system_metrics(self):
+        """Set up periodic collection of system metrics."""
+        def update_system_metrics():
+            try:
+                # Update MongoDB connections
+                if hasattr(self, 'db_manager'):
+                    metrics_collector.update_mongodb_connections(
+                        self.db_manager.get_connection_count()
+                    )
+                
+                # Update Redis connections
+                if hasattr(self, 'redis_manager'):
+                    metrics_collector.update_redis_connections(
+                        self.redis_manager.get_connection_count()
+                    )
+            except Exception as e:
+                self.logger.error(f"Error updating system metrics: {e}")
+        
+        # Schedule periodic updates
+        self.scheduler.add_job(
+            update_system_metrics,
+            'interval',
+            seconds=15,
+            id='system_metrics_update'
+        )
