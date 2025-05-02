@@ -41,6 +41,12 @@ Our system utilizes a microservices architecture with the following key componen
 - Sets up authentication
 - Manages secret distribution
 - Initializes security policies
+- Security features:
+  - One-time execution (restart: "no")
+  - Temporary script execution permissions
+  - Automatic permission revocation after initialization
+  - Scripts retained for audit/debugging
+  - Clear security state logging
 
 ### 3. Application Services
 
@@ -141,6 +147,8 @@ The system uses named volumes for persistent data:
    - All sensitive data managed by Vault
    - No hardcoded credentials
    - Secure secret distribution
+   - Initialization scripts with temporary execution rights
+   - Automated security controls for initialization process
 
 2. **Service Security**
    - Password-protected Redis

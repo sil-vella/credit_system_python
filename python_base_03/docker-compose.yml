@@ -54,6 +54,7 @@ services:
       - KUBECONFIG=/k8s-config/kubeconfig
     command: >
       sh -c "
+        echo '🔄 Phase 1: System initialization (with internet access)' &&
         apk add --no-cache docker-cli curl kind kubectl &&
         cd /workspace &&
         kind create cluster --config kind-config.yaml --kubeconfig /k8s-config/kubeconfig &&
@@ -61,18 +62,26 @@ services:
           echo 'Waiting for cluster to be ready...'
           sleep 5
         done &&
-        echo 'Kubernetes cluster is ready'
+        echo '✅ Kubernetes cluster is ready' &&
+        echo '🔒 Setup complete - container will exit'
       "
     networks:
-      - vault_internal
-      - cr_credit_system_network
+      vault_internal:
+        aliases:
+          - k8s-init
+      init_network: {}  # Temporary network for initialization
+    restart: "no"  # Only run once
+    healthcheck:
+      test: ["CMD", "kubectl", "--kubeconfig", "/k8s-config/kubeconfig", "get", "pods", "-A"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   vault:
     image: hashicorp/vault:1.15
     cap_add:
       - IPC_LOCK
-    ports:
-      - "8200:8200"
     environment:
       VAULT_ADDR: 'http://0.0.0.0:8200'
       VAULT_API_ADDR: 'http://0.0.0.0:8200'
@@ -83,7 +92,7 @@ services:
       vault_internal:
         aliases:
           - vault
-      vault_setup:
+      init_network:
         aliases:
           - vault
     healthcheck:
@@ -109,10 +118,7 @@ services:
       - KUBECONFIG=/k8s-config/kubeconfig
     command: >
       sh -c "
-        echo '🔄 Phase 1: System initialization (with internet access)' &&
         apk add --no-cache curl &&
-        echo '✅ System initialization complete' &&
-        echo '🔄 Phase 2: Vault configuration (internal network only)' &&
         mkdir -p /secrets &&
         if [ ! -f /secrets/vault_token ]; then
           echo 'Creating vault_token file...' &&
@@ -120,15 +126,17 @@ services:
           chmod 600 /secrets/vault_token &&
           echo '✅ Vault token secret has been configured!'
         fi &&
-        chmod +x /scripts/init-vault-secrets.sh &&
+        echo '🔒 Making scripts temporarily executable...' &&
+        chmod +x /scripts/*.sh &&
+        echo '🚀 Running initialization scripts...' &&
         /scripts/init-vault-secrets.sh &&
-        echo '✅ Vault configuration completed!'
+        echo '🔒 Removing execute permissions from scripts...' &&
+        chmod -x /scripts/*.sh &&
+        echo '✅ Vault configuration completed! Scripts are now locked.'
       "
     networks:
-      vault_setup: {}
-      vault_internal:
-        aliases:
-          - vault-config
+      - vault_internal
+      - init_network
     depends_on:
       vault:
         condition: service_healthy
@@ -338,10 +346,20 @@ networks:
     name: cr_credit_system_vault_internal
     driver: bridge
     internal: true
-  vault_setup:
-    name: cr_credit_system_vault_setup
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "true"
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+    ipam:
+      driver: default
+      config:
+        - subnet: "172.28.0.0/16"
+          ip_range: "172.28.5.0/24"
+          gateway: "172.28.0.1"
+    enable_ipv6: false
+  init_network:
+    name: cr_credit_system_init_network
     driver: bridge
-    internal: false
+    internal: false  # Needs internet access for initialization
   cr_credit_system_network:
     name: cr_credit_system_network
     driver: bridge
