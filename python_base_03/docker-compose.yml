@@ -64,6 +64,7 @@ services:
         echo 'Kubernetes cluster is ready'
       "
     networks:
+      - vault_internal
       - cr_credit_system_network
 
   vault:
@@ -79,7 +80,12 @@ services:
       VAULT_DEV_LISTEN_ADDRESS: '0.0.0.0:8200'
     command: server -dev
     networks:
-      - cr_credit_system_network
+      vault_internal:
+        aliases:
+          - vault
+      vault_setup:
+        aliases:
+          - vault
     healthcheck:
       test: ["CMD", "vault", "status"]
       interval: 10s
@@ -103,7 +109,10 @@ services:
       - KUBECONFIG=/k8s-config/kubeconfig
     command: >
       sh -c "
+        echo '🔄 Phase 1: System initialization (with internet access)' &&
         apk add --no-cache curl &&
+        echo '✅ System initialization complete' &&
+        echo '🔄 Phase 2: Vault configuration (internal network only)' &&
         mkdir -p /secrets &&
         if [ ! -f /secrets/vault_token ]; then
           echo 'Creating vault_token file...' &&
@@ -116,10 +125,14 @@ services:
         echo '✅ Vault configuration completed!'
       "
     networks:
-      - cr_credit_system_network
+      vault_setup: {}
+      vault_internal:
+        aliases:
+          - vault-config
     depends_on:
       vault:
         condition: service_healthy
+    restart: "no"
 
   flask_app:
     build:
@@ -181,6 +194,7 @@ services:
       redis:
         condition: service_healthy
     networks:
+      - vault_internal
       - cr_credit_system_network
     command: >
       sh -c "
@@ -320,6 +334,14 @@ services:
       retries: 3
 
 networks:
+  vault_internal:
+    name: cr_credit_system_vault_internal
+    driver: bridge
+    internal: true
+  vault_setup:
+    name: cr_credit_system_vault_setup
+    driver: bridge
+    internal: false
   cr_credit_system_network:
     name: cr_credit_system_network
     driver: bridge
