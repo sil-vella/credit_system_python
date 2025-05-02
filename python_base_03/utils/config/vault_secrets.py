@@ -26,36 +26,38 @@ class VaultSecretsManager:
                 url=os.getenv('VAULT_ADDR', 'http://vault:8200')
             )
             
-            # Try to authenticate using the token from secrets
-            token = self._read_token_from_secret()
-            if token:
-                self._client.token = token
-                if self._client.is_authenticated():
-                    logger.info("Successfully authenticated to Vault using token")
-                    return
+            # Primary: Try Kubernetes authentication first
+            if self._authenticate_kubernetes():
+                return
 
-            # Fallback to Kubernetes authentication
-            self._authenticate_kubernetes()
+            # Development only: Fallback to token authentication
+            if os.getenv('FLASK_ENV') == 'development':
+                token = self._read_token_from_secret()
+                if token:
+                    self._client.token = token
+                    if self._client.is_authenticated():
+                        logger.info("Successfully authenticated to Vault using development token")
+                        return
+                    logger.warning("Development token authentication failed")
+            else:
+                logger.error("Kubernetes authentication failed and token auth is not allowed in production")
+
         except Exception as e:
             logger.error(f"Vault initialization failed: {e}", exc_info=True)
             self._client = None
 
-    def _read_token_from_secret(self) -> Optional[str]:
-        """Read Vault token from Docker secret"""
+    def _authenticate_kubernetes(self) -> bool:
+        """
+        Authenticate using Kubernetes service account
+        Returns:
+            bool: True if authentication successful, False otherwise
+        """
         try:
-            with open('/run/secrets/vault_token', 'r') as f:
-                logger.debug("Successfully read Vault token from Docker secret")
-                return f.read().strip()
-        except FileNotFoundError:
-            logger.debug("No Vault token found in Docker secrets")
-            return None
-        except Exception as e:
-            logger.error(f"Error reading Vault token: {e}", exc_info=True)
-            return None
+            # Check if we're running in a Kubernetes environment
+            if not os.path.exists('/var/run/secrets/kubernetes.io/serviceaccount/token'):
+                logger.debug("Not running in a Kubernetes environment")
+                return False
 
-    def _authenticate_kubernetes(self):
-        """Authenticate using Kubernetes service account"""
-        try:
             with open('/var/run/secrets/kubernetes.io/serviceaccount/token', 'r') as f:
                 jwt = f.read()
             
@@ -64,10 +66,34 @@ class VaultSecretsManager:
                 jwt=jwt
             )
             logger.info("Successfully authenticated to Vault using Kubernetes")
+            return True
         except FileNotFoundError:
-            logger.warning("No Kubernetes service account token found")
+            logger.debug("No Kubernetes service account token found")
+            return False
         except Exception as e:
             logger.error(f"Kubernetes authentication failed: {e}", exc_info=True)
+            return False
+
+    def _read_token_from_secret(self) -> Optional[str]:
+        """
+        Read Vault token from Docker secret (Development only)
+        Returns:
+            Optional[str]: Token if found and in development mode, None otherwise
+        """
+        if os.getenv('FLASK_ENV') != 'development':
+            logger.warning("Attempted to use token authentication in non-development environment")
+            return None
+
+        try:
+            with open('/run/secrets/vault_token', 'r') as f:
+                logger.debug("Successfully read development Vault token from Docker secret")
+                return f.read().strip()
+        except FileNotFoundError:
+            logger.debug("No Vault token found in Docker secrets")
+            return None
+        except Exception as e:
+            logger.error(f"Error reading Vault token: {e}", exc_info=True)
+            return None
 
     def get_secret(self, path: str, key: str) -> Optional[str]:
         """
