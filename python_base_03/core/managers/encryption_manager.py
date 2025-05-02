@@ -2,9 +2,11 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import base64
-import os
 from typing import Any, Dict, Optional
-from utils.config.config import Config
+from utils.config.config import config
+import logging
+
+logger = logging.getLogger(__name__)
 
 class EncryptionManager:
     """Manager for handling data encryption at rest."""
@@ -13,107 +15,75 @@ class EncryptionManager:
     SALT_LENGTH = 16
     ITERATIONS = 100000
     
+    _instance = None
+    _fernet = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(EncryptionManager, cls).__new__(cls)
+        return cls._instance
+
     def __init__(self):
         """Initialize the encryption manager."""
-        self._fernet = None
-        self._initialize_fernet()
+        if not self._fernet:
+            self._initialize_fernet()
     
     def _initialize_fernet(self) -> None:
         """Initialize the Fernet encryption instance."""
-        # Try to get encryption key from environment or file
-        key = os.getenv('ENCRYPTION_KEY')
-        key_file = os.getenv('ENCRYPTION_KEY_FILE')
-        
-        if key_file and os.path.exists(key_file):
-            try:
-                with open(key_file, 'r') as f:
-                    key = f.read().strip()
-            except Exception as e:
-                raise RuntimeError(f"Failed to read encryption key from file: {e}")
-        
-        if not key:
-            raise RuntimeError("ENCRYPTION_KEY environment variable or ENCRYPTION_KEY_FILE is required")
-        
-        # Derive encryption key using PBKDF2
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=Config.ENCRYPTION_SALT.encode(),
-            iterations=self.ITERATIONS
-        )
-        derived_key = base64.urlsafe_b64encode(kdf.derive(key.encode()))
-        
-        # Initialize Fernet with derived key
-        self._fernet = Fernet(derived_key)
-    
-    def encrypt_data(self, data: Any) -> str:
-        """
-        Encrypt data using AES-256.
-        
-        Args:
-            data: Data to encrypt (will be converted to string)
+        try:
+            encryption_config = config.ENCRYPTION_CONFIG
             
-        Returns:
-            str: Encrypted data as base64 string
-        """
+            if not encryption_config['key']:
+                raise RuntimeError("Encryption key not found in Vault")
+            
+            # Derive encryption key using PBKDF2
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=encryption_config['salt'].encode(),
+                iterations=self.ITERATIONS
+            )
+            derived_key = base64.urlsafe_b64encode(kdf.derive(encryption_config['key'].encode()))
+            
+            # Initialize Fernet with derived key
+            self._fernet = Fernet(derived_key)
+            logger.info("✅ Encryption manager initialized successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize encryption manager: {e}")
+            raise
+
+    def encrypt(self, data: str) -> str:
+        """Encrypt a string."""
         if not self._fernet:
-            raise RuntimeError("Encryption manager not initialized")
-        
-        # Convert data to string if needed
-        if not isinstance(data, str):
-            data = str(data)
-        
-        # Encrypt data
-        encrypted_data = self._fernet.encrypt(data.encode())
-        return encrypted_data.decode()
-    
-    def decrypt_data(self, encrypted_data: str) -> str:
-        """
-        Decrypt data that was encrypted using AES-256.
-        
-        Args:
-            encrypted_data: Encrypted data as base64 string
-            
-        Returns:
-            str: Decrypted data
-        """
+            self._initialize_fernet()
+        try:
+            return self._fernet.encrypt(data.encode()).decode()
+        except Exception as e:
+            logger.error(f"❌ Encryption failed: {e}")
+            raise
+
+    def decrypt(self, encrypted_data: str) -> str:
+        """Decrypt an encrypted string."""
         if not self._fernet:
-            raise RuntimeError("Encryption manager not initialized")
-        
-        # Decrypt data
-        decrypted_data = self._fernet.decrypt(encrypted_data.encode())
-        return decrypted_data.decode()
-    
-    def encrypt_sensitive_fields(self, data: Dict[str, Any], fields: list) -> Dict[str, Any]:
-        """
-        Encrypt specific fields in a dictionary.
-        
-        Args:
-            data: Dictionary containing data to encrypt
-            fields: List of field names to encrypt
-            
-        Returns:
-            Dict: Dictionary with encrypted fields
-        """
-        encrypted_data = data.copy()
-        for field in fields:
-            if field in encrypted_data and encrypted_data[field] is not None:
-                encrypted_data[field] = self.encrypt_data(encrypted_data[field])
-        return encrypted_data
-    
-    def decrypt_sensitive_fields(self, data: Dict[str, Any], fields: list) -> Dict[str, Any]:
-        """
-        Decrypt specific fields in a dictionary.
-        
-        Args:
-            data: Dictionary containing encrypted data
-            fields: List of field names to decrypt
-            
-        Returns:
-            Dict: Dictionary with decrypted fields
-        """
-        decrypted_data = data.copy()
-        for field in fields:
-            if field in decrypted_data and decrypted_data[field] is not None:
-                decrypted_data[field] = self.decrypt_data(decrypted_data[field])
-        return decrypted_data 
+            self._initialize_fernet()
+        try:
+            return self._fernet.decrypt(encrypted_data.encode()).decode()
+        except Exception as e:
+            logger.error(f"❌ Decryption failed: {e}")
+            raise
+
+    def encrypt_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Encrypt sensitive fields in a dictionary."""
+        encrypted = data.copy()
+        for field in config.get_secret("secret/app/flask", "sensitive_fields", "").split(","):
+            if field in encrypted and encrypted[field]:
+                encrypted[field] = self.encrypt(str(encrypted[field]))
+        return encrypted
+
+    def decrypt_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Decrypt sensitive fields in a dictionary."""
+        decrypted = data.copy()
+        for field in config.get_secret("secret/app/flask", "sensitive_fields", "").split(","):
+            if field in decrypted and decrypted[field]:
+                decrypted[field] = self.decrypt(str(decrypted[field]))
+        return decrypted 

@@ -300,17 +300,23 @@ class AppManager:
         """Set up periodic collection of system metrics."""
         def update_system_metrics():
             try:
-                # Update MongoDB connections
-                if hasattr(self, 'db_manager'):
-                    metrics_collector.update_mongodb_connections(
-                        self.db_manager.get_connection_count()
-                    )
+                # Update MongoDB connections if available
+                if hasattr(self, 'db_manager') and self.db_manager:
+                    try:
+                        metrics_collector.update_mongodb_connections(
+                            self.db_manager.get_connection_count()
+                        )
+                    except Exception as e:
+                        self.logger.warning(f"Failed to update MongoDB metrics: {e}")
                 
-                # Update Redis connections
-                if hasattr(self, 'redis_manager'):
-                    metrics_collector.update_redis_connections(
-                        self.redis_manager.get_connection_count()
-                    )
+                # Update Redis connections if available
+                if hasattr(self, 'redis_manager') and self.redis_manager and self.redis_manager._initialized:
+                    try:
+                        metrics_collector.update_redis_connections(
+                            self.redis_manager.get_connection_count()
+                        )
+                    except Exception as e:
+                        self.logger.warning(f"Failed to update Redis metrics: {e}")
             except Exception as e:
                 self.logger.error(f"Error updating system metrics: {e}")
         

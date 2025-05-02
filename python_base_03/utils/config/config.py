@@ -1,5 +1,109 @@
 import os
 from .vault_secrets import vault_secrets
+from typing import Optional, Any
+import logging
+
+logger = logging.getLogger(__name__)
+
+class Config:
+    """
+    Central configuration class that handles all secret management through Vault.
+    This is the ONLY point of access for secrets in the application.
+    
+    Usage:
+        from utils.config.config import config
+        
+        # Get a secret
+        secret = config.get_secret("secret/app/flask", "key", "default")
+        
+        # Use predefined configurations
+        mongodb_uri = config.MONGODB_URI
+        redis_config = config.REDIS_CONFIG
+        flask_config = config.FLASK_CONFIG
+    """
+    
+    @staticmethod
+    def get_secret(vault_path: str, key: str, default: Any = None) -> Optional[str]:
+        """
+        Get a secret exclusively from Vault
+        
+        Args:
+            vault_path: The path in Vault (e.g., 'secret/app/flask')
+            key: The specific key to retrieve
+            default: Default value if secret is not found
+        
+        Returns:
+            The secret value or default if not found
+        """
+        try:
+            value = vault_secrets.get_secret(vault_path, key)
+            if value is not None:
+                return value
+            
+            if default is not None:
+                logger.warning(f"Secret {key} not found in Vault path {vault_path}, using default value")
+                return str(default)
+            
+            logger.error(f"Secret {key} not found in Vault path {vault_path} and no default provided")
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving secret {key} from Vault: {e}")
+            return default if default is not None else None
+
+    # MongoDB Configuration
+    @property
+    def MONGODB_URI(self) -> str:
+        host = self.get_secret("secret/app/mongodb", "host", "mongodb")
+        port = self.get_secret("secret/app/mongodb", "port", "27017")
+        user = self.get_secret("secret/app/mongodb", "root_username", "root")
+        password = self.get_secret("secret/app/mongodb", "root_password")
+        db = self.get_secret("secret/app/mongodb", "db_name", "credit_system")
+        
+        if not password:
+            raise ValueError("MongoDB password not found in Vault")
+        
+        return f"mongodb://{user}:{password}@{host}:{port}/{db}?authSource=admin"
+
+    # Redis Configuration
+    @property
+    def REDIS_CONFIG(self) -> dict:
+        return {
+            'host': self.get_secret("secret/app/redis", "host", "redis"),
+            'port': int(self.get_secret("secret/app/redis", "port", "6379")),
+            'password': self.get_secret("secret/app/redis", "password", "redis"),
+            'db': int(self.get_secret("secret/app/redis", "db", "0")),
+            'ssl': self.get_secret("secret/app/redis", "ssl", "false").lower() == "true",
+            'ssl_verify_mode': self.get_secret("secret/app/redis", "ssl_verify_mode", "none")
+        }
+
+    # Flask Configuration
+    @property
+    def FLASK_CONFIG(self) -> dict:
+        return {
+            'SECRET_KEY': self.get_secret("secret/app/flask", "secret_key"),
+            'JWT_SECRET_KEY': self.get_secret("secret/app/flask", "jwt_key"),
+            'SERVICE_NAME': self.get_secret("secret/app/flask", "service_name", "flask"),
+            'PORT': int(self.get_secret("secret/app/flask", "port", "5000"))
+        }
+
+    # Encryption Configuration
+    @property
+    def ENCRYPTION_CONFIG(self) -> dict:
+        return {
+            'key': self.get_secret("secret/app/flask", "encryption_key"),
+            'salt': self.get_secret("secret/app/flask", "encryption_salt", "default_salt_123")
+        }
+
+    # Stripe Configuration
+    @property
+    def STRIPE_CONFIG(self) -> dict:
+        return {
+            'secret_key': self.get_secret("secret/app/stripe", "secret_key"),
+            'api_version': self.get_secret("secret/app/stripe", "api_version", "2022-11-15")
+        }
+
+# Global instance
+config = Config()
 
 def get_secret(secret_name: str, vault_path: str = None, vault_key: str = None) -> str:
     """
@@ -222,7 +326,6 @@ class Config:
     ]
 
     # MongoDB Configuration
-    MONGODB_URI = get_secret("MONGODB_URI", "secret/app/flask", "mongodb_uri") or "mongodb://localhost:27017/"
     MONGODB_AUTH_SOURCE = get_secret("MONGODB_AUTH_SOURCE", "secret/app/flask", "mongodb_auth_source") or "admin"
     
     # MongoDB Role-Based Access Control

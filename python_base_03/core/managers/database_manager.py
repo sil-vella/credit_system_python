@@ -1,53 +1,28 @@
 from typing import Dict, Any, Optional
 from core.managers.encryption_manager import EncryptionManager
-from utils.config.config import Config
+from utils.config.config import config
 from pymongo import MongoClient, ReadPreference
 from pymongo.read_concern import ReadConcern
 from pymongo.write_concern import WriteConcern
 from pymongo.errors import OperationFailure, ConnectionFailure
 import logging
-import os
 
-# Helper to read secrets from files
-def read_secret_file(path: str) -> Optional[str]:
-    try:
-        with open(path, 'r') as f:
-            return f.read().strip()
-    except Exception:
-        return None
+logger = logging.getLogger(__name__)
 
 class DatabaseManager:
     def __init__(self, role: str = "read_write"):
-        """Initialize the database manager with role-based access control."""
-        self.encryption_manager = EncryptionManager()
+        """Initialize database manager with specific role."""
         self.role = role
         self.logger = logging.getLogger(__name__)
+        self.client = None
+        self.db = None
         self._setup_mongodb_connection()
-
-    def _get_password_from_file(self, password_file_path: str) -> str:
-        """Read password from a file."""
-        try:
-            with open(password_file_path, 'r') as f:
-                return f.read().strip()
-        except Exception as e:
-            self.logger.error(f"Failed to read password file: {e}")
-            raise
 
     def _setup_mongodb_connection(self):
         """Set up MongoDB connection with role-based access control and read-only replicas."""
         try:
-            # Prefer secrets files for all config values
-            mongodb_user = read_secret_file('/run/secrets/mongodb_root_user') or os.environ.get('MONGODB_ROOT_USER', 'root')
-            password = read_secret_file('/run/secrets/mongodb_root_password') or os.environ.get('MONGODB_ROOT_PASSWORD')
-            mongodb_host = read_secret_file('/run/secrets/mongodb_service_name') or os.environ.get('MONGODB_SERVICE_NAME', 'mongodb')
-            mongodb_port = read_secret_file('/run/secrets/mongodb_port') or os.environ.get('MONGODB_PORT', '27017')
-            mongodb_db = read_secret_file('/run/secrets/mongodb_db_name') or os.environ.get('MONGODB_DB_NAME', 'credit_system')
-
-            if not password:
-                raise ValueError("MongoDB password not provided")
-
-            # Construct MongoDB URI
-            mongodb_uri = f"mongodb://{mongodb_user}:{password}@{mongodb_host}:{mongodb_port}/{mongodb_db}?authSource=admin"
+            # Get MongoDB URI from config
+            mongodb_uri = config.MONGODB_URI
 
             # Set up connection options
             options = {
@@ -60,7 +35,7 @@ class DatabaseManager:
 
             # Create MongoDB client
             self.client = MongoClient(mongodb_uri, **options)
-            self.db = self.client[mongodb_db]
+            self.db = self.client[config.get_secret("secret/app/mongodb", "db_name", "credit_system")]
 
             # Verify connection and access
             self._verify_connection_and_access()
@@ -70,22 +45,29 @@ class DatabaseManager:
             raise
 
     def _verify_connection_and_access(self):
-        """Verify MongoDB connection and role-based access."""
+        """Verify database connection and role-based access."""
         try:
-            # Test connection
-            self.client.server_info()
+            # Ping database
+            self.client.admin.command('ping')
             self.logger.info("✅ Successfully connected to MongoDB")
 
-            # Test write access if role is read_write
-            if self.role == "read_write":
-                self.db.command("ping")
-                self.logger.info("✅ Write access verified")
+            # Verify role-based access
+            if self.role == "read_only":
+                # Attempt a read operation
+                self.db.list_collection_names()
+                self.logger.info("✅ Read-only access verified")
+            else:
+                # Attempt a write operation to a test collection
+                test_collection = self.db.get_collection('connection_test')
+                test_collection.insert_one({'test': 'write_access'})
+                test_collection.delete_one({'test': 'write_access'})
+                self.logger.info("✅ Read-write access verified")
 
         except OperationFailure as e:
-            self.logger.error(f"❌ Role-based access verification failed: {str(e)}")
+            self.logger.error(f"❌ Access verification failed: {str(e)}")
             raise
         except ConnectionFailure as e:
-            self.logger.error(f"❌ Failed to connect to MongoDB: {str(e)}")
+            self.logger.error(f"❌ Database connection failed: {str(e)}")
             raise
 
     def insert_one(self, collection: str, document: Dict[str, Any]) -> str:
@@ -143,9 +125,9 @@ class DatabaseManager:
     def _encrypt_sensitive_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Encrypt sensitive fields in the data dictionary."""
         encrypted_data = data.copy()
-        for field in Config.SENSITIVE_FIELDS:
+        for field in config.SENSITIVE_FIELDS:
             if field in encrypted_data and encrypted_data[field] is not None:
-                encrypted_data[field] = self.encryption_manager.encrypt_field(
+                encrypted_data[field] = EncryptionManager().encrypt_field(
                     encrypted_data[field]
                 )
         return encrypted_data
@@ -153,9 +135,9 @@ class DatabaseManager:
     def _decrypt_sensitive_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Decrypt sensitive fields in the data dictionary."""
         decrypted_data = data.copy()
-        for field in Config.SENSITIVE_FIELDS:
+        for field in config.SENSITIVE_FIELDS:
             if field in decrypted_data and decrypted_data[field] is not None:
-                decrypted_data[field] = self.encryption_manager.decrypt_field(
+                decrypted_data[field] = EncryptionManager().decrypt_field(
                     decrypted_data[field]
                 )
         return decrypted_data

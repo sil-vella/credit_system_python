@@ -5,7 +5,7 @@ from redis.connection import ConnectionPool
 from typing import Optional, Any, Union, List
 from tools.logger.custom_logging import custom_log
 import hashlib
-from utils.config.config import Config
+from utils.config.config import config
 import json
 import base64
 from cryptography.fernet import Fernet
@@ -13,16 +13,10 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from datetime import datetime
 
-# Helper to read secrets from files
-def read_secret_file(path: str) -> Optional[str]:
-    try:
-        with open(path, 'r') as f:
-            return f.read().strip()
-    except Exception:
-        return None
-
 class RedisManager:
     _instance = None
+    _redis = None
+    _connection_pool = None
     _initialized = False
 
     def __new__(cls):
@@ -31,80 +25,73 @@ class RedisManager:
         return cls._instance
 
     def __init__(self):
-        if not RedisManager._initialized:
-            self.redis = None
-            self.connection_pool = None
+        if not self._redis:
+            custom_log("Initializing Redis Manager...")
             self._initialize_connection_pool()
             self._setup_encryption()
             self._token_prefix = "token"
             self._token_set_prefix = "tokens"
             RedisManager._initialized = True
+            custom_log("Redis Manager initialization completed.")
 
     def _setup_encryption(self):
         """Set up encryption key using PBKDF2."""
-        # Use Redis password as salt for key derivation
-        redis_password = self._get_redis_password()
-        salt = redis_password.encode()
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt,
-            iterations=100000,
-        )
-        key = base64.urlsafe_b64encode(kdf.derive(redis_password.encode()))
-        self.cipher_suite = Fernet(key)
-
-    def _get_redis_password(self):
-        """Get Redis password from environment or password file."""
-        redis_password = ""
-        redis_password_file = os.getenv("REDIS_PASSWORD_FILE")
-        if redis_password_file:
-            try:
-                with open(redis_password_file, 'r') as f:
-                    redis_password = f.read().strip()
-            except Exception as e:
-                custom_log(f"❌ Error reading Redis password file: {e}")
-                redis_password = os.getenv("REDIS_PASSWORD", "")
-        else:
-            redis_password = os.getenv("REDIS_PASSWORD", "")
-        return redis_password
+        try:
+            custom_log("Setting up Redis encryption...")
+            # Use Redis password from config as salt for key derivation
+            redis_password = config.REDIS_CONFIG['password']
+            custom_log(f"Using Redis password from config: {redis_password}")
+            salt = redis_password.encode()
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=salt,
+                iterations=100000,
+            )
+            key = base64.urlsafe_b64encode(kdf.derive(redis_password.encode()))
+            self.cipher_suite = Fernet(key)
+            custom_log("Redis encryption setup completed successfully.")
+        except Exception as e:
+            custom_log(f"❌ Error setting up Redis encryption: {str(e)}")
+            raise
 
     def _initialize_connection_pool(self):
         """Initialize Redis connection pool with security settings."""
         try:
-            # Read host and port from secrets if available, else env, else default
-            redis_host = read_secret_file('/run/secrets/redis_host') or os.getenv("REDIS_HOST", "localhost")
-            redis_port = int(read_secret_file('/run/secrets/redis_port') or os.getenv("REDIS_PORT", "6379"))
-            redis_password = self._get_redis_password()
-
-            # Base connection pool settings
-            pool_settings = {
-                'host': redis_host,
-                'port': redis_port,
-                'password': redis_password,
-                'decode_responses': True,
-                'socket_timeout': 5,
-                'socket_connect_timeout': 5,
-                'retry_on_timeout': True
-            }
-            
-            # Add SSL settings only if SSL is enabled
-            if Config.REDIS_USE_SSL:
-                pool_settings.update({
-                    'ssl': True,
-                    'ssl_cert_reqs': Config.REDIS_SSL_VERIFY_MODE
-                })
+            redis_config = config.REDIS_CONFIG
+            custom_log(f"Initializing Redis connection pool with config: {redis_config}")
             
             # Create connection pool
-            self.connection_pool = redis.ConnectionPool(**pool_settings)
+            self._connection_pool = redis.ConnectionPool(
+                host=redis_config.get('host', 'localhost'),
+                port=int(redis_config.get('port', 6379)),
+                db=int(redis_config.get('db', 0)),
+                password=redis_config.get('password'),
+                decode_responses=True,
+                socket_timeout=5,
+                socket_connect_timeout=5,
+                retry_on_timeout=True
+            )
+            
+            # Create Redis client
+            self._redis = redis.Redis(connection_pool=self._connection_pool)
             
             # Test connection
-            self.redis = redis.Redis(connection_pool=self.connection_pool)
-            self.redis.ping()
-            custom_log(f"✅ Redis connection pool initialized successfully (host={redis_host}, port={redis_port})")
+            self._redis.ping()
+            custom_log("✅ Redis connection pool initialized successfully")
+            self._initialized = True
+            
         except Exception as e:
-            custom_log(f"❌ Error initializing Redis connection pool: {e}")
+            custom_log(f"❌ Failed to initialize Redis connection pool: {str(e)}")
+            self._initialized = False
             raise
+
+    @property
+    def redis(self) -> Redis:
+        """Get Redis client instance."""
+        if not self._redis:
+            self._initialize_connection_pool()
+        return self._redis
 
     def _generate_secure_key(self, prefix, *args):
         """Generate a cryptographically secure cache key."""
@@ -368,8 +355,8 @@ class RedisManager:
     def dispose(self):
         """Clean up Redis connections."""
         try:
-            if self.connection_pool:
-                self.connection_pool.disconnect()
+            if self._connection_pool:
+                self._connection_pool.disconnect()
                 custom_log("✅ Redis connection pool disposed")
         except Exception as e:
             custom_log(f"❌ Error disposing Redis connection pool: {e}")
@@ -627,4 +614,25 @@ class RedisManager:
             return self.expire(token_key, seconds)
         except Exception as e:
             custom_log(f"❌ Error extending token TTL: {e}")
-            return False 
+            return False
+
+    def keys(self, pattern: str = "*") -> List[str]:
+        """Find all keys matching the given pattern."""
+        return self.redis.keys(pattern)
+
+    def flush_db(self) -> bool:
+        """Clear all keys from the current database."""
+        return self.redis.flushdb()
+
+    def health_check(self) -> bool:
+        """Check if Redis connection is healthy."""
+        try:
+            return bool(self.redis.ping())
+        except:
+            return False
+
+    def get_connection_count(self) -> int:
+        """Get the number of active Redis connections."""
+        if not self._connection_pool:
+            return 0
+        return len(self._connection_pool._in_use_connections) + len(self._connection_pool._available_connections) 

@@ -130,6 +130,7 @@ services:
     environment:
       - FLASK_ENV=development
       - VAULT_ADDR=http://vault:8200
+      - VAULT_TOKEN=dev-token
       - KUBECONFIG=/k8s-config/kubeconfig
       - PYTHONPATH_FILE=/run/secrets/pythonpath
       - MONGODB_SERVICE_NAME_FILE=/run/secrets/mongodb_service_name

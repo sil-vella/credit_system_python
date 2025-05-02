@@ -79,7 +79,10 @@ class MetricsCollector:
     
     def update_redis_connections(self, count: int):
         """Update Redis connections metric."""
-        self.redis_connections.set(count)
+        try:
+            self.redis_connections.set(count)
+        except Exception as e:
+            self.logger.warning(f"Failed to update Redis connections metric: {e}")
 
 # Global metrics collector instance
 metrics_collector = MetricsCollector() 
