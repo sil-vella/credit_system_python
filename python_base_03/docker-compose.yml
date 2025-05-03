@@ -52,19 +52,16 @@ services:
     environment:
       - VAULT_ADDR=http://vault:8200
       - KUBECONFIG=/k8s-config/kubeconfig
-    command: >
-      sh -c "
-        echo '🔄 Phase 1: System initialization (with internet access)' &&
-        apk add --no-cache docker-cli curl kind kubectl &&
-        cd /workspace &&
-        kind create cluster --config kind-config.yaml --kubeconfig /k8s-config/kubeconfig &&
-        until kubectl --kubeconfig /k8s-config/kubeconfig get pods -A | grep -q 'Running'; do
-          echo 'Waiting for cluster to be ready...'
-          sleep 5
-        done &&
-        echo '✅ Kubernetes cluster is ready' &&
-        echo '🔒 Setup complete - container will exit'
-      "
+    command: |
+      sh -c '
+        exec 1> >(tee -a /workspace/tools/logger/compose.log) 2>&1
+        echo "📝 [$(date +%Y-%m-%d\ %H:%M:%S)] Starting k8s initialization..."
+        echo "🔒 Making initialization script executable..."
+        chmod +x /workspace/scripts/k8s-init.sh
+        /workspace/scripts/k8s-init.sh
+        echo "🔒 Removing execute permissions..."
+        chmod -x /workspace/scripts/k8s-init.sh
+        echo "📝 [$(date +%Y-%m-%d\ %H:%M:%S)] K8s initialization completed"'
     networks:
       vault_internal:
         aliases:
