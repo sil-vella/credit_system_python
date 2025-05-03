@@ -13,6 +13,7 @@ set -e  # Exit on any error
 # Color codes for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Log function for consistent output
@@ -45,6 +46,18 @@ check_command() {
     fi
 }
 
+# Function to cleanup existing clusters
+cleanup_clusters() {
+    log "${YELLOW}🧹 Checking for existing clusters...${NC}"
+    if kind get clusters 2>/dev/null | grep -q "vault-auth"; then
+        log "${YELLOW}Found existing vault-auth cluster, deleting...${NC}"
+        kind delete cluster --name vault-auth
+        log "${GREEN}✅ Existing cluster deleted${NC}"
+    else
+        log "No existing clusters found"
+    fi
+}
+
 # Main initialization function
 init_kubernetes() {
     log "🔄 Phase 1: System initialization"
@@ -53,6 +66,9 @@ init_kubernetes() {
     for tool in docker-cli curl kind kubectl; do
         check_command "$tool"
     done
+
+    # Cleanup any existing clusters
+    cleanup_clusters
 
     # Ensure we're in the workspace directory
     cd /workspace

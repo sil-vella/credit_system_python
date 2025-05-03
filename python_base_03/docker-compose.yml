@@ -47,7 +47,9 @@ services:
     image: alpine:3.18
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - .:/workspace
+      - ./kind-config.yaml:/workspace/kind-config.yaml:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./tools/logger:/workspace/tools/logger  # Need write for logs
       - k8s-config:/k8s-config
     environment:
       - VAULT_ADDR=http://vault:8200
@@ -56,11 +58,23 @@ services:
       sh -c '
         exec 1> >(tee -a /workspace/tools/logger/compose.log) 2>&1
         echo "📝 [$(date +%Y-%m-%d\ %H:%M:%S)] Starting k8s initialization..."
-        echo "🔒 Making initialization script executable..."
-        chmod +x /workspace/scripts/k8s-init.sh
-        /workspace/scripts/k8s-init.sh
-        echo "🔒 Removing execute permissions..."
-        chmod -x /workspace/scripts/k8s-init.sh
+        
+        # Create temporary directory for script execution
+        TEMP_DIR=$(mktemp -d)
+        echo "📋 Creating temporary workspace at $TEMP_DIR"
+        
+        # Copy script to temp directory and make it executable
+        cp /workspace/scripts/k8s-init.sh $TEMP_DIR/
+        chmod +x $TEMP_DIR/k8s-init.sh
+        
+        # Execute from temp location
+        echo "🚀 Executing initialization script..."
+        $TEMP_DIR/k8s-init.sh
+        
+        # Cleanup
+        echo "🧹 Cleaning up temporary files..."
+        rm -rf $TEMP_DIR
+        
         echo "📝 [$(date +%Y-%m-%d\ %H:%M:%S)] K8s initialization completed"'
     networks:
       vault_internal:
