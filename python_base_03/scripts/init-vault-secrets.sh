@@ -162,7 +162,7 @@ vault kv put secret/app/redis \
   host="redis" \
   port="6379" \
   db="0" \
-  password="template_three_redis_password" \
+  password="redis_pass789!@#" \
   ssl="false" \
   ssl_ca_certs="" \
   ssl_certfile="" \
