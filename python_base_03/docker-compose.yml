@@ -54,6 +54,11 @@ services:
     environment:
       - VAULT_ADDR=http://vault:8200
       - KUBECONFIG=/k8s-config/kubeconfig
+      - KUBERNETES_API_HOST=vault-auth-control-plane
+    networks:
+      - vault_internal
+      - init_network
+      - kind
     command: |
       sh -c '
         exec 1> >(tee -a /workspace/tools/logger/compose.log) 2>&1
@@ -76,18 +81,7 @@ services:
         rm -rf $TEMP_DIR
         
         echo "📝 [$(date +%Y-%m-%d\ %H:%M:%S)] K8s initialization completed"'
-    networks:
-      vault_internal:
-        aliases:
-          - k8s-init
-      init_network: {}  # Temporary network for initialization
     restart: "no"  # Only run once
-    healthcheck:
-      test: ["CMD", "kubectl", "--kubeconfig", "/k8s-config/kubeconfig", "get", "pods", "-A"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
 
   vault:
     image: hashicorp/vault:1.15
@@ -98,14 +92,12 @@ services:
       VAULT_API_ADDR: 'http://0.0.0.0:8200'
       VAULT_DEV_ROOT_TOKEN_ID: 'dev-token'
       VAULT_DEV_LISTEN_ADDRESS: '0.0.0.0:8200'
+      KUBERNETES_API_HOST: vault-auth-control-plane
     command: server -dev
     networks:
-      vault_internal:
-        aliases:
-          - vault
-      init_network:
-        aliases:
-          - vault
+      - vault_internal
+      - init_network
+      - kind
     healthcheck:
       test: ["CMD", "vault", "status"]
       interval: 10s
@@ -115,7 +107,8 @@ services:
       - vault-data:/vault/file
       - k8s-config:/k8s-config:ro
     depends_on:
-      - k8s-init
+      k8s-init:
+        condition: service_started
 
   vault-config:
     image: hashicorp/vault:1.15
@@ -357,20 +350,12 @@ networks:
     name: cr_credit_system_vault_internal
     driver: bridge
     internal: true
-    driver_opts:
-      com.docker.network.bridge.enable_icc: "true"
-      com.docker.network.bridge.enable_ip_masquerade: "false"
-    ipam:
-      driver: default
-      config:
-        - subnet: "172.28.0.0/16"
-          ip_range: "172.28.5.0/24"
-          gateway: "172.28.0.1"
-    enable_ipv6: false
   init_network:
     name: cr_credit_system_init_network
     driver: bridge
-    internal: false  # Needs internet access for initialization
+  kind:
+    name: kind
+    external: true
   cr_credit_system_network:
     name: cr_credit_system_network
     driver: bridge
