@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 from core.managers.app_manager import AppManager
 import sys
@@ -25,6 +25,10 @@ app_manager.initialize(app)
 
 # Additional app-level configurations
 app.config["DEBUG"] = True
+
+@app.route('/health')
+def health_check():
+    return jsonify({"status": "healthy"}), 200
 
 if __name__ == "__main__":
     # Run with WebSocket support

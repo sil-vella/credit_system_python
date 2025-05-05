@@ -61,6 +61,9 @@ services:
       - kind
     command: |
       sh -c '
+        # Clear existing log file
+        echo "" > /workspace/tools/logger/compose.log
+        
         exec 1> >(tee -a /workspace/tools/logger/compose.log) 2>&1
         echo "📝 [$(date +%Y-%m-%d\ %H:%M:%S)] Starting k8s initialization..."
         
@@ -99,51 +102,83 @@ services:
       - init_network
       - kind
     healthcheck:
-      test: ["CMD", "vault", "status"]
+      test: ["CMD", "vault", "status", "-address=http://0.0.0.0:8200"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 5s
     volumes:
       - vault-data:/vault/file
       - k8s-config:/k8s-config:ro
     depends_on:
       k8s-init:
-        condition: service_started
+        condition: service_completed_successfully
 
   vault-config:
     image: hashicorp/vault:1.15
+    networks:
+      - vault_internal
+      - init_network
+      - kind
     volumes:
       - k8s-config:/k8s-config:ro
       - ${PWD}/secrets:/secrets
       - ${PWD}/scripts:/scripts
+      - vault-auth-sa-token:/var/run/secrets/kubernetes.io/serviceaccount:ro
+      - ./tools/logger:/workspace/tools/logger
     environment:
       - VAULT_ADDR=http://vault:8200
       - VAULT_TOKEN=dev-token
       - KUBECONFIG=/k8s-config/kubeconfig
-    command: >
-      sh -c "
-        apk add --no-cache curl &&
-        mkdir -p /secrets &&
-        if [ ! -f /secrets/vault_token ]; then
-          echo 'Creating vault_token file...' &&
-          echo 'dev-token' > /secrets/vault_token &&
-          chmod 600 /secrets/vault_token &&
-          echo '✅ Vault token secret has been configured!'
-        fi &&
-        echo '🔒 Making scripts temporarily executable...' &&
-        chmod +x /scripts/*.sh &&
-        echo '🚀 Running initialization scripts...' &&
-        /scripts/init-vault-secrets.sh &&
-        echo '🔒 Removing execute permissions from scripts...' &&
-        chmod -x /scripts/*.sh &&
-        echo '✅ Vault configuration completed! Scripts are now locked.'
-      "
-    networks:
-      - vault_internal
-      - init_network
+      - KUBERNETES_SERVICE_HOST=vault-auth-control-plane
+      - KUBERNETES_SERVICE_PORT=6443
     depends_on:
       vault:
         condition: service_healthy
+      k8s-init:
+        condition: service_completed_successfully
+    command: |
+      sh -c '
+        # Set up logging
+        exec 1> >(tee -a /workspace/tools/logger/compose.log)
+        exec 2>&1
+        
+        echo "----------------------------------------"
+        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Starting Vault configuration process"
+        echo "----------------------------------------"
+        
+        # Install required packages
+        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Installing required packages..."
+        apk add --no-cache curl
+
+        # Install kubectl properly
+        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Installing kubectl..."
+        curl -LO "https://dl.k8s.io/release/v1.29.2/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        mv kubectl /usr/local/bin/
+        echo "[$(date "+%Y-%m-%d %H:%M:%S")] kubectl version: $(kubectl version --client -o yaml)"
+
+        # Wait for Vault to be ready
+        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Waiting for Vault to be ready..."
+        until curl -fs http://vault:8200/v1/sys/health; do
+          echo "[$(date "+%Y-%m-%d %H:%M:%S")] Vault not ready, retrying in 5 seconds..."
+          sleep 5
+        done
+        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Vault is ready"
+        
+        # Make scripts executable
+        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Making initialization scripts executable..."
+        chmod +x /scripts/setup-k8s-auth.sh
+        chmod +x /scripts/init-vault-secrets.sh
+        
+        # Run setup scripts
+        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Running setup-k8s-auth.sh..."
+        /scripts/setup-k8s-auth.sh
+        
+        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Running init-vault-secrets.sh..."
+        /scripts/init-vault-secrets.sh
+        
+        echo "[$(date "+%Y-%m-%d %H:%M:%S")] ✅ Vault configuration completed"'
     restart: "no"
 
   flask_app:
@@ -155,7 +190,10 @@ services:
     environment:
       - FLASK_ENV=development
       - VAULT_ADDR=http://vault:8200
-      - VAULT_TOKEN=dev-token
+      - VAULT_TOKEN=dev-token  # For initial setup only, will be replaced by K8s auth
+      - VAULT_AUTH_METHOD=kubernetes
+      - VAULT_ROLE=flask-auth
+      - VAULT_MOUNT_POINT=kubernetes
       - KUBECONFIG=/k8s-config/kubeconfig
       - PYTHONPATH_FILE=/run/secrets/pythonpath
       - MONGODB_SERVICE_NAME_FILE=/run/secrets/mongodb_service_name
@@ -172,8 +210,6 @@ services:
       - ENCRYPTION_KEY_FILE=/run/secrets/encryption_key
       - REDIS_PASSWORD_FILE=/run/secrets/redis_password
       - STRIPE_SECRET_KEY_FILE=/run/secrets/stripe_secret_key
-    ports:
-      - "5000:5000"
     volumes:
       - ./plugins:/app/plugins
       - ./core:/app/core
@@ -181,6 +217,7 @@ services:
       - ./tools:/app/tools
       - ./utils:/app/utils
       - k8s-config:/k8s-config:ro
+      - vault-auth-sa-token:/var/run/secrets/kubernetes.io/serviceaccount:ro
     secrets:
       - mongodb_service_name
       - mongodb_root_user
@@ -197,7 +234,6 @@ services:
       - encryption_key
       - redis_password
       - stripe_secret_key
-      - vault_token
     depends_on:
       vault-config:
         condition: service_completed_successfully
@@ -205,20 +241,37 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     networks:
       - vault_internal
       - cr_credit_system_network
-    command: >
-      sh -c "
-      pip install --no-cache-dir -r /app/requirements.txt &&
-      pip install --no-cache-dir gevent &&
-      gunicorn -b 0.0.0.0:5000 --worker-class gevent app:app
-      "
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 10s
+      timeout: 5s
       retries: 5
       start_period: 10s
+    command: |
+      sh -c '
+        echo "Waiting for Vault to be ready..."
+        until vault status -address=$${VAULT_ADDR}; do
+          echo "Vault not ready, retrying in 5 seconds..."
+          sleep 5
+        done
+
+        echo "Authenticating with Vault using Kubernetes..."
+        if ! vault write -address=$${VAULT_ADDR} auth/kubernetes/login role=flask-auth jwt=@/var/run/secrets/kubernetes.io/serviceaccount/token; then
+          echo "Failed to authenticate with Vault using Kubernetes. Using default token..."
+        fi
+
+        echo "Installing Python dependencies..."
+        pip install --no-cache-dir -r /app/requirements.txt
+        pip install --no-cache-dir gevent
+
+        echo "Starting Flask application..."
+        exec gunicorn -b 0.0.0.0:5000 --worker-class gevent app:app
+      '
 
   mongodb:
     image: mongo:latest
@@ -251,7 +304,11 @@ services:
     image: redis:alpine
     container_name: redis
     restart: always
-    command: sh -c 'redis-server --requirepass "$$(cat /run/secrets/redis_password)"'
+    command: |
+      sh -c '
+        REDIS_PASSWORD=$(cat /run/secrets/redis_password)
+        redis-server --requirepass "$REDIS_PASSWORD"
+      '
     volumes:
       - cr_credit_system_redis_data:/data
       - ./secrets:/run/secrets:ro
@@ -265,7 +322,11 @@ services:
     networks:
       - cr_credit_system_network
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "$$(cat /run/secrets/redis_password)", "ping"]
+      test: |
+        sh -c '
+          REDIS_PASSWORD=$(cat /run/secrets/redis_password)
+          redis-cli -a "$REDIS_PASSWORD" ping
+        '
       interval: 10s
       timeout: 5s
       retries: 5
@@ -377,3 +438,5 @@ volumes:
     name: cr_credit_system_k8s_config
   vault-data:
     name: cr_credit_system_vault_data
+  vault-auth-sa-token:
+    name: vault-auth-sa-token
