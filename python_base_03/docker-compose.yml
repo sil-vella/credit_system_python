@@ -49,7 +49,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./kind-config.yaml:/workspace/kind-config.yaml:ro
       - ./scripts:/workspace/scripts:ro
-      - ./tools/logger:/workspace/tools/logger  # Need write for logs
+      - ./tools/logger:/workspace/tools/logger
       - k8s-config:/k8s-config
     environment:
       - VAULT_ADDR=http://vault:8200
@@ -58,7 +58,6 @@ services:
     networks:
       - vault_internal
       - init_network
-      - kind
     command: |
       sh -c '
         # Clear existing log file
@@ -66,6 +65,10 @@ services:
         
         exec 1> >(tee -a /workspace/tools/logger/compose.log) 2>&1
         echo "📝 [$(date +%Y-%m-%d\ %H:%M:%S)] Starting k8s initialization..."
+        
+        # Create kind network if it doesn't exist
+        echo "Creating kind network if it doesn't exist..."
+        docker network create kind || true
         
         # Create temporary directory for script execution
         TEMP_DIR=$(mktemp -d)
@@ -110,9 +113,10 @@ services:
     volumes:
       - vault-data:/vault/file
       - k8s-config:/k8s-config:ro
-    depends_on:
+    depends_on: 
       k8s-init:
         condition: service_completed_successfully
+    restart: on-failure
 
   vault-config:
     image: hashicorp/vault:1.15
@@ -409,14 +413,11 @@ services:
 networks:
   vault_internal:
     name: cr_credit_system_vault_internal
-    driver: bridge
-    internal: true
   init_network:
     name: cr_credit_system_init_network
-    driver: bridge
   kind:
     name: kind
-    external: true
+    driver: bridge
   cr_credit_system_network:
     name: cr_credit_system_network
     driver: bridge

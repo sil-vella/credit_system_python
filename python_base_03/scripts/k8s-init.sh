@@ -255,61 +255,67 @@ wait_for_api_server() {
     return 1
 }
 
-# Main initialization function
-init_kubernetes() {
-    # Set up emergency cleanup on script termination
-    trap emergency_cleanup INT TERM
-
-    log "INIT" "Starting system initialization"
-
-    # Install required tools
-    for tool in docker-cli curl kind kubectl; do
-        check_command "$tool"
-    done
-
-    # Cleanup any existing resources
-    cleanup_resources
-
-    # Create KinD cluster with timeout
-    log "INIT" "Creating Kubernetes cluster using KinD..."
-    if ! timeout 300 kind create cluster --config /workspace/kind-config.yaml --kubeconfig /k8s-config/kubeconfig; then
-        log "ERROR" "Failed to create KinD cluster within timeout"
-        exit 1
-    fi
-
-    # Add a delay to allow initial container startup
-    log "INIT" "Waiting for initial container startup..."
-    sleep 20
-
-    # Wait for API server
-    if ! wait_for_api_server; then
-        log "ERROR" "API server failed to become ready"
-        verify_kind_cluster  # Run verification to gather diagnostics
-        exit 1
-    fi
-
-    # Wait for cluster readiness with timeout
-    if ! wait_for_pods; then
-        log "ERROR" "Cluster failed to become ready"
-        exit 1
-    fi
-
-    # Final verification
-    if kubectl --kubeconfig /k8s-config/kubeconfig cluster-info > /dev/null 2>&1; then
-        log "SUCCESS" "Kubernetes cluster is ready"
-        log "SUCCESS" "Control plane is healthy"
-        log "SUCCESS" "System pods are running"
-        exit 0
+# Function to ensure kind network exists
+ensure_kind_network() {
+    log "NETWORK" "Ensuring kind network exists..."
+    if ! docker network ls | grep -q "kind"; then
+        log "NETWORK" "Creating kind network..."
+        docker network create kind
+        log "SUCCESS" "Kind network created"
     else
-        log "ERROR" "Final cluster verification failed"
-        exit 1
+        log "NETWORK" "Kind network already exists"
     fi
 }
 
-# Main execution
+# Main execution starts here
 log "START" "Beginning Kubernetes initialization"
-init_kubernetes || {
-    log "ERROR" "Kubernetes initialization failed"
+log "INIT" "Starting system initialization"
+
+# Install required tools
+check_command "docker-cli"
+check_command "curl"
+check_command "kind"
+check_command "kubectl"
+
+# Clean up any existing resources
+cleanup_resources
+
+# Ensure kind network exists before cluster creation
+ensure_kind_network
+
+# Create the KinD cluster
+log "INIT" "Creating Kubernetes cluster using KinD..."
+if ! timeout 300 kind create cluster --config /workspace/kind-config.yaml --kubeconfig /k8s-config/kubeconfig; then
+    log "ERROR" "Failed to create KinD cluster within timeout"
     exit 1
-}
+fi
+
+# Add a delay to allow initial container startup
+log "INIT" "Waiting for initial container startup..."
+sleep 20
+
+# Wait for API server
+if ! wait_for_api_server; then
+    log "ERROR" "API server failed to become ready"
+    verify_kind_cluster  # Run verification to gather diagnostics
+    exit 1
+fi
+
+# Wait for cluster readiness with timeout
+if ! wait_for_pods; then
+    log "ERROR" "Cluster failed to become ready"
+    exit 1
+fi
+
+# Final verification
+if kubectl --kubeconfig /k8s-config/kubeconfig cluster-info > /dev/null 2>&1; then
+    log "SUCCESS" "Kubernetes cluster is ready"
+    log "SUCCESS" "Control plane is healthy"
+    log "SUCCESS" "System pods are running"
+    exit 0
+else
+    log "ERROR" "Final cluster verification failed"
+    exit 1
+fi
+
 log "END" "Setup complete - initialization successful" 
