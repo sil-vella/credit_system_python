@@ -140,6 +140,7 @@ class Config:
     FLASK_SERVICE_NAME = get_secret("flask_service_name", "secret/app/flask", "service_name") or "flask"
     FLASK_PORT = int(get_secret("flask_port", "secret/app/flask", "port") or "5000")
     PYTHONPATH = get_secret("pythonpath", "secret/app/flask", "pythonpath") or os.getenv("PYTHONPATH", "/app")
+    TEMP_DIR = get_secret("temp_dir", "secret/app/flask", "temp_dir") or "/tmp"
 
     # MongoDB Configuration
     MONGODB_SERVICE_NAME = get_secret("mongodb_service_name", "secret/app/mongodb", "service_name") or "mongodb"
@@ -154,7 +155,7 @@ class Config:
     REDIS_SERVICE_NAME = get_secret("redis_service_name", "secret/app/redis", "service_name") or "redis"
     REDIS_HOST = get_secret("redis_host", "secret/app/redis", "host") or "redis"
     REDIS_PORT = int(get_secret("redis_port", "secret/app/redis", "port") or "6379")
-    REDIS_PASSWORD = get_secret("redis_password", "secret/app/redis", "password")
+    REDIS_PASSWORD = get_secret("redis_password", "secret/app/flask", "redis_password")  # No default for security
 
     # Debug mode
     DEBUG = get_secret("FLASK_DEBUG", "secret/app/flask", "debug").lower() in ("true", "1")

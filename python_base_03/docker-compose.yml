@@ -41,9 +41,26 @@ secrets:
     file: ./secrets/grafana_admin_password
   vault_token:
     file: ./secrets/vault_token
+  temp_dir:
+    file: ./secrets/temp_dir
 
 services:
+  clear-logs:
+    image: alpine:3.18
+    volumes:
+      - ./tools/logger:/workspace/tools/logger
+    command: |
+      sh -c '
+        echo "----------------------------------------" > /workspace/tools/logger/compose.log
+        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Starting new compose session" >> /workspace/tools/logger/compose.log
+        echo "----------------------------------------" >> /workspace/tools/logger/compose.log
+      '
+    restart: "no"
+
   k8s-init:
+    depends_on:
+      clear-logs:
+        condition: service_completed_successfully
     image: alpine:3.18
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -60,9 +77,6 @@ services:
       - init_network
     command: |
       sh -c '
-        # Clear existing log file
-        echo "" > /workspace/tools/logger/compose.log
-        
         exec 1> >(tee -a /workspace/tools/logger/compose.log) 2>&1
         echo "📝 [$(date +%Y-%m-%d\ %H:%M:%S)] Starting k8s initialization..."
         
@@ -113,21 +127,24 @@ services:
     volumes:
       - vault-data:/vault/file
       - k8s-config:/k8s-config:ro
-    depends_on: 
+    depends_on:
+      clear-logs:
+        condition: service_completed_successfully
       k8s-init:
         condition: service_completed_successfully
     restart: on-failure
 
   vault-config:
-    image: hashicorp/vault:1.15
+    build:
+      context: .
+      dockerfile: vault-config.Dockerfile
     networks:
       - vault_internal
       - init_network
       - kind
     volumes:
       - k8s-config:/k8s-config:ro
-      - ${PWD}/secrets:/secrets
-      - ${PWD}/scripts:/scripts
+      - ${PWD}/secrets:/secrets:ro
       - vault-auth-sa-token:/var/run/secrets/kubernetes.io/serviceaccount:ro
       - ./tools/logger:/workspace/tools/logger
     environment:
@@ -151,17 +168,6 @@ services:
         echo "[$(date "+%Y-%m-%d %H:%M:%S")] Starting Vault configuration process"
         echo "----------------------------------------"
         
-        # Install required packages
-        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Installing required packages..."
-        apk add --no-cache curl
-
-        # Install kubectl properly
-        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Installing kubectl..."
-        curl -LO "https://dl.k8s.io/release/v1.29.2/bin/linux/amd64/kubectl"
-        chmod +x kubectl
-        mv kubectl /usr/local/bin/
-        echo "[$(date "+%Y-%m-%d %H:%M:%S")] kubectl version: $(kubectl version --client -o yaml)"
-
         # Wait for Vault to be ready
         echo "[$(date "+%Y-%m-%d %H:%M:%S")] Waiting for Vault to be ready..."
         until curl -fs http://vault:8200/v1/sys/health; do
@@ -170,17 +176,12 @@ services:
         done
         echo "[$(date "+%Y-%m-%d %H:%M:%S")] Vault is ready"
         
-        # Make scripts executable
-        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Making initialization scripts executable..."
-        chmod +x /scripts/setup-k8s-auth.sh
-        chmod +x /scripts/init-vault-secrets.sh
-        
         # Run setup scripts
         echo "[$(date "+%Y-%m-%d %H:%M:%S")] Running setup-k8s-auth.sh..."
-        /scripts/setup-k8s-auth.sh
+        /app/scripts/setup-k8s-auth.sh
         
         echo "[$(date "+%Y-%m-%d %H:%M:%S")] Running init-vault-secrets.sh..."
-        /scripts/init-vault-secrets.sh
+        /app/scripts/init-vault-secrets.sh
         
         echo "[$(date "+%Y-%m-%d %H:%M:%S")] ✅ Vault configuration completed"'
     restart: "no"

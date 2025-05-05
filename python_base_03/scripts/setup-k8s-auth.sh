@@ -1,13 +1,28 @@
-#!/bin/sh
+#!/bin/bash
+
+# Configure logging
+exec 1> >(tee -a /workspace/tools/logger/compose.log)
+exec 2>&1
+
+# Set color codes for logging
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m'  # No Color
+
+# Logging function
+log() {
+    local level=$1
+    local message=$2
+    echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} ${YELLOW}[${level}]${NC} ${message}"
+}
+
+log "INIT" "Starting Kubernetes authentication setup in Vault..."
 
 set -e  # Exit on any error
 
 # Color codes for output
 GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
 RED='\033[0;31m'
-NC='\033[0m' # No Color
 
 # Function to log with timestamps and categories
 log() {
@@ -32,8 +47,6 @@ log_cmd() {
         return $status
     fi
 }
-
-log "INIT" "Starting Kubernetes authentication setup in Vault..."
 
 # Wait for Vault to be ready
 log "WAIT" "Waiting for Vault to become ready..."

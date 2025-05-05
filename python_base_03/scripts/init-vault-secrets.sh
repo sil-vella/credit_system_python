@@ -1,13 +1,28 @@
-#!/bin/sh
+#!/bin/bash
+
+# Configure logging
+exec 1> >(tee -a /workspace/tools/logger/compose.log)
+exec 2>&1
+
+# Set color codes for logging
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m'  # No Color
+
+# Logging function
+log() {
+    local level=$1
+    local message=$2
+    echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} ${YELLOW}[${level}]${NC} ${message}"
+}
+
+log "INIT" "Starting Vault secrets initialization..."
 
 set -e  # Exit on any error
 
 # Color codes for output
 GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
 RED='\033[0;31m'
-NC='\033[0m' # No Color
 
 # Function to log with timestamps and categories
 log() {
@@ -32,8 +47,6 @@ log_cmd() {
         return $status
     fi
 }
-
-log "INIT" "Starting Vault secrets initialization..."
 
 # Wait for Vault to be ready
 log "WAIT" "Waiting for Vault to become ready..."
@@ -102,7 +115,61 @@ log_cmd "vault kv put secret/app/flask \
   redis_encryption_salt='$(openssl rand -hex 16)' \
   redis_encryption_iterations='100000' \
   redis_max_cache_size='1048576' \
-  redis_cache_ttl='300'" "Create Flask secrets"
+  redis_cache_ttl='300' \
+  rate_limit_enabled='true' \
+  temp_dir='/tmp' \
+  credit_system_url='http://localhost:8000' \
+  credit_system_api_key='$(openssl rand -hex 32)' \
+  rate_limit_ip_requests='100' \
+  rate_limit_ip_window='60' \
+  rate_limit_ip_prefix='rate_limit:ip' \
+  rate_limit_user_requests='1000' \
+  rate_limit_user_window='3600' \
+  rate_limit_user_prefix='rate_limit:user' \
+  rate_limit_api_key_requests='10000' \
+  rate_limit_api_key_window='3600' \
+  rate_limit_api_key_prefix='rate_limit:api_key' \
+  rate_limit_headers_enabled='true' \
+  rate_limit_header_limit='X-RateLimit-Limit' \
+  rate_limit_header_remaining='X-RateLimit-Remaining' \
+  rate_limit_header_reset='X-RateLimit-Reset' \
+  auto_ban_enabled='true' \
+  auto_ban_violations_threshold='5' \
+  auto_ban_duration='3600' \
+  auto_ban_window='300' \
+  auto_ban_prefix='ban' \
+  auto_ban_violations_prefix='violations' \
+  credit_min_amount='0.01' \
+  credit_max_amount='1000000.0' \
+  credit_precision='2' \
+  credit_allow_negative='false' \
+  max_metadata_size='1024' \
+  max_reference_id_length='64' \
+  allowed_transaction_types='purchase,reward,burn,transfer,refund' \
+  transaction_window='3600' \
+  require_transaction_id='true' \
+  enforce_balance_validation='true' \
+  max_payload_size='1048576' \
+  max_nesting_depth='10' \
+  max_array_size='1000' \
+  max_string_length='65536' \
+  encryption_salt='$(openssl rand -hex 16)' \
+  mongodb_auth_source='admin' \
+  mongodb_replica_set='' \
+  mongodb_read_preference='primary' \
+  mongodb_read_concern='majority' \
+  mongodb_write_concern='majority' \
+  mongodb_max_pool_size='100' \
+  mongodb_min_pool_size='10' \
+  mongodb_max_idle_time_ms='60000' \
+  mongodb_socket_timeout_ms='5000' \
+  mongodb_connect_timeout_ms='5000' \
+  mongodb_ssl='false' \
+  mongodb_ssl_ca_file='' \
+  mongodb_ssl_cert_file='' \
+  mongodb_ssl_key_file='' \
+  mongodb_ssl_allow_invalid_certificates='false' \
+  allowed_origins='http://localhost:5000,http://localhost:3000'" "Create Flask secrets"
 
 # Initialize MongoDB secrets
 log "SECRETS" "Initializing MongoDB secrets..."
