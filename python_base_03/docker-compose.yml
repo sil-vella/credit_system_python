@@ -236,6 +236,7 @@ services:
       - ./static:/app/static
       - ./tools:/app/tools
       - ./utils:/app/utils
+      - ./scripts:/app/scripts  # Mount scripts directory
       - k8s-config:/k8s-config:ro
       - vault-auth-sa-token:/var/run/secrets/kubernetes.io/serviceaccount:ro
     secrets:
@@ -283,6 +284,10 @@ services:
         pip install --no-cache-dir -r /app/requirements.txt
         pip install --no-cache-dir gevent
 
+        echo "Setting up database authentication..."
+        chmod +x /app/scripts/setup-db-auth.sh
+        /app/scripts/setup-db-auth.sh
+
         echo "Starting Flask application..."
         exec gunicorn -b 0.0.0.0:5000 --worker-class gevent app:app
       '
@@ -307,6 +312,7 @@ services:
     image: redis:alpine
     container_name: redis
     restart: always
+    command: redis-server
     volumes:
       - cr_credit_system_redis_data:/data
     networks:
