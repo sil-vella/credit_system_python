@@ -65,8 +65,26 @@ log_cmd "vault secrets move kv secret || true" "Move KV secrets to 'secret' path
 log "SETUP" "Enabling Kubernetes authentication method..."
 log_cmd "vault auth enable kubernetes" "Enable Kubernetes auth"
 
-# Get the Kubernetes CA certificate
-log "SETUP" "Retrieving Kubernetes CA certificate and token..."
+# Wait for service account token and CA cert
+log "SETUP" "Waiting for service account token and CA cert..."
+timeout=60
+counter=0
+while [ $counter -lt $timeout ]; do
+    if [ -f "/var/run/secrets/kubernetes.io/serviceaccount/token" ] && [ -f "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt" ]; then
+        log "SUCCESS" "Service account token and CA cert found"
+        break
+    fi
+    counter=$((counter + 1))
+    sleep 1
+done
+
+if [ $counter -eq $timeout ]; then
+    log "ERROR" "Timeout waiting for service account token and CA cert"
+    exit 1
+fi
+
+# Get the Kubernetes CA certificate and token
+log "SETUP" "Reading Kubernetes CA certificate and token..."
 KUBE_CA_CERT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/ca.crt)
 KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
 KUBE_HOST="https://vault-auth-control-plane:6443"

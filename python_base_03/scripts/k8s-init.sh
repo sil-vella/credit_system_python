@@ -305,22 +305,129 @@ if ! timeout 300 kind create cluster --config /workspace/kind-config.yaml --kube
     exit 1
 fi
 
-# Add a delay to allow initial container startup
-log "INIT" "Waiting for initial container startup..."
-sleep 20
+# Wait for container to be running
+log "INIT" "Waiting for control plane container to be ready..."
+timeout=60
+counter=0
+while [ $counter -lt $timeout ]; do
+    if docker inspect vault-auth-control-plane --format '{{.State.Running}}' 2>/dev/null | grep -q "true"; then
+        log "SUCCESS" "Control plane container is running"
+        break
+    fi
+    counter=$((counter + 1))
+    sleep 1
+done
 
-# Wait for API server
-if ! wait_for_api_server; then
-    log "ERROR" "API server failed to become ready"
-    verify_kind_cluster  # Run verification to gather diagnostics
+if [ $counter -eq $timeout ]; then
+    log "ERROR" "Timeout waiting for control plane container"
     exit 1
 fi
+
+# Get the container IP and port
+log "CONFIG" "Getting container IP and port..."
+CONTAINER_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' vault-auth-control-plane)
+API_PORT=$(docker port vault-auth-control-plane | grep 6443 | sed -e 's/.*://')
+
+if [ -z "$CONTAINER_IP" ] || [ -z "$API_PORT" ]; then
+    log "ERROR" "Failed to get container IP or port"
+    exit 1
+fi
+
+log "INFO" "Control plane container IP: $CONTAINER_IP, API Port: $API_PORT"
+
+# Update kubeconfig with correct IP and port
+log "CONFIG" "Updating kubeconfig with container IP and port..."
+sed -i "s|server: https://.*|server: https://${CONTAINER_IP}:6443|" /k8s-config/kubeconfig
+
+# Wait for API server
+log "INIT" "Waiting for API server to be ready..."
+timeout=120
+counter=0
+while [ $counter -lt $timeout ]; do
+    if curl -sk https://${CONTAINER_IP}:6443/healthz >/dev/null 2>&1; then
+        log "SUCCESS" "API server is ready"
+        break
+    fi
+    log "INFO" "Waiting for API server... ($(($timeout - $counter))s remaining)"
+    counter=$((counter + 1))
+    sleep 1
+done
+
+if [ $counter -eq $timeout ]; then
+    log "ERROR" "Timeout waiting for API server"
+    verify_kind_cluster
+    exit 1
+fi
+
+# Verify kubeconfig is working
+log "VERIFY" "Testing cluster connectivity..."
+if ! kubectl --kubeconfig /k8s-config/kubeconfig cluster-info; then
+    log "ERROR" "Cannot connect to cluster after kubeconfig update"
+    verify_kind_cluster
+    exit 1
+fi
+
+# Add a delay to allow all control plane components to start
+log "INIT" "Waiting for control plane components to stabilize..."
+sleep 30
 
 # Wait for cluster readiness with timeout
 if ! wait_for_pods; then
     log "ERROR" "Cluster failed to become ready"
     exit 1
 fi
+
+# Apply the service account configuration
+log "INIT" "Creating Flask service account..."
+if ! kubectl --kubeconfig /k8s-config/kubeconfig apply -f /workspace/k8s/flask-auth-sa.yaml; then
+    log "ERROR" "Failed to create Flask service account"
+    exit 1
+fi
+log "SUCCESS" "Flask service account created successfully"
+
+# Wait for service account to be ready
+log "INIT" "Waiting for service account to be ready..."
+timeout=60
+counter=0
+while [ $counter -lt $timeout ]; do
+    if kubectl --kubeconfig /k8s-config/kubeconfig get serviceaccount flask-auth -n default -o jsonpath='{.secrets[0].name}' >/dev/null 2>&1; then
+        log "SUCCESS" "Service account is ready"
+        break
+    fi
+    counter=$((counter + 1))
+    sleep 1
+done
+
+if [ $counter -eq $timeout ]; then
+    log "ERROR" "Timeout waiting for service account to be ready"
+    exit 1
+fi
+
+# Create directory for service account token
+log "INIT" "Setting up service account token directory..."
+mkdir -p /var/run/secrets/kubernetes.io/serviceaccount
+chmod 755 /var/run/secrets/kubernetes.io/serviceaccount
+
+# Create token and CA cert
+log "INIT" "Creating service account token and CA cert..."
+if ! kubectl --kubeconfig /k8s-config/kubeconfig create token flask-auth --duration=8760h > /var/run/secrets/kubernetes.io/serviceaccount/token; then
+    log "ERROR" "Failed to create service account token"
+    exit 1
+fi
+
+# Get the CA cert
+if ! kubectl --kubeconfig /k8s-config/kubeconfig get secret -n kube-system -o jsonpath='{.items[?(@.type=="kubernetes.io/service-account-token")].data.ca\.crt}' | base64 -d > /var/run/secrets/kubernetes.io/serviceaccount/ca.crt; then
+    log "ERROR" "Failed to get CA certificate"
+    exit 1
+fi
+
+# Verify token and CA cert exist
+if [ ! -f "/var/run/secrets/kubernetes.io/serviceaccount/token" ] || [ ! -f "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt" ]; then
+    log "ERROR" "Service account token or CA cert not created"
+    exit 1
+fi
+
+log "SUCCESS" "Service account token and CA cert created successfully"
 
 # Final verification
 if kubectl --kubeconfig /k8s-config/kubeconfig cluster-info > /dev/null 2>&1; then

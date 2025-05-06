@@ -55,8 +55,8 @@ log_cmd "vault secrets enable -path=secret kv-v2" "Enable KV v2 secrets engine"
 log "SECRETS" "Storing MongoDB development secrets..."
 log_cmd "vault kv put secret/app/mongodb \
     service_name='mongodb' \
-    root_username='root' \
-    root_password='rootpassword' \
+    host='mongodb' \
+    port='27017' \
     db_name='credit_system'" "Create MongoDB development secrets"
 
 # Store Redis secrets
@@ -65,7 +65,7 @@ log_cmd "vault kv put secret/app/redis \
     service_name='redis' \
     host='redis' \
     port='6379' \
-    password='redis_password'" "Create Redis development secrets"
+    db='0'" "Create Redis development secrets"
 
 # Store Flask secrets
 log "SECRETS" "Storing Flask development secrets..."

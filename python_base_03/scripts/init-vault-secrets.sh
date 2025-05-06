@@ -175,19 +175,10 @@ log_cmd "vault kv put secret/app/flask \
 log "SECRETS" "Initializing MongoDB secrets..."
 log_cmd "vault kv put secret/app/mongodb \
   service_name='mongodb' \
-  root_username='root' \
-  root_password='$(openssl rand -hex 32)' \
-  username='credit_system_user' \
-  password='$(openssl rand -hex 32)' \
-  db_name='credit_system' \
   host='mongodb' \
   port='27017' \
+  db_name='credit_system' \
   database='admin' \
-  auth_source='admin' \
-  auth_mechanism='SCRAM-SHA-256' \
-  tls='false' \
-  retry_writes='true' \
-  retry_reads='true' \
   max_pool_size='100' \
   min_pool_size='0'" "Create MongoDB secrets"
 
@@ -198,15 +189,7 @@ log_cmd "vault kv put secret/app/redis \
   host='redis' \
   port='6379' \
   db='0' \
-  password='$(openssl rand -hex 32)' \
-  ssl='false' \
-  ssl_ca_certs='' \
-  ssl_certfile='' \
-  ssl_keyfile='' \
-  ssl_cert_reqs='none' \
-  ssl_check_hostname='false' \
-  retry_on_timeout='true' \
-  retry_on_error='true'" "Create Redis secrets"
+  max_connections='100'" "Create Redis secrets"
 
 log "SUCCESS" "✅ Vault secrets initialization completed successfully!"
 log "SUMMARY" "The following secrets have been configured:"

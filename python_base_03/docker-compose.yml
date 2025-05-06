@@ -59,15 +59,20 @@ services:
 
   k8s-init:
     depends_on:
+      vault:
+        condition: service_healthy
       clear-logs:
         condition: service_completed_successfully
-    image: alpine:3.18
+    image: docker:24.0-dind
+    privileged: true
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./kind-config.yaml:/workspace/kind-config.yaml:ro
       - ./scripts:/workspace/scripts:ro
+      - ./k8s:/workspace/k8s:ro
       - ./tools/logger:/workspace/tools/logger
       - k8s-config:/k8s-config
+      - vault-auth-sa-token:/var/run/secrets/kubernetes.io/serviceaccount
     environment:
       - VAULT_ADDR=http://vault:8200
       - KUBECONFIG=/k8s-config/kubeconfig
@@ -75,33 +80,44 @@ services:
     networks:
       - vault_internal
       - init_network
+      - kind
     command: |
       sh -c '
         exec 1> >(tee -a /workspace/tools/logger/compose.log) 2>&1
         echo "📝 [$(date +%Y-%m-%d\ %H:%M:%S)] Starting k8s initialization..."
         
-        # Create kind network if it doesn't exist
-        echo "Creating kind network if it doesn't exist..."
-        docker network create kind || true
+        # Create service account token directory
+        mkdir -p /var/run/secrets/kubernetes.io/serviceaccount
+        chmod 755 /var/run/secrets/kubernetes.io/serviceaccount
         
-        # Create temporary directory for script execution
-        TEMP_DIR=$(mktemp -d)
-        echo "📋 Creating temporary workspace at $TEMP_DIR"
+        # Install basic packages
+        apk add --no-cache \
+          curl \
+          bash \
+          git \
+          jq \
+          netcat-openbsd
         
-        # Copy script to temp directory and make it executable
-        cp /workspace/scripts/k8s-init.sh $TEMP_DIR/
-        chmod +x $TEMP_DIR/k8s-init.sh
+        # Install kubectl
+        echo "Installing kubectl..."
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        mv kubectl /usr/local/bin/
         
-        # Execute from temp location
-        echo "🚀 Executing initialization script..."
-        $TEMP_DIR/k8s-init.sh
+        # Install kind
+        echo "Installing kind..."
+        curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+        chmod +x ./kind
+        mv ./kind /usr/local/bin/
         
-        # Cleanup
-        echo "🧹 Cleaning up temporary files..."
-        rm -rf $TEMP_DIR
+        # Execute initialization script
+        /workspace/scripts/k8s-init.sh
         
-        echo "📝 [$(date +%Y-%m-%d\ %H:%M:%S)] K8s initialization completed"'
-    restart: "no"  # Only run once
+        # Copy CA certificate to shared volume
+        echo "Copying CA certificate..."
+        kubectl get configmap -n kube-system kube-root-ca.crt -o jsonpath="{.data['ca\.crt']}" > /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        chmod 644 /var/run/secrets/kubernetes.io/serviceaccount/ca.crt'
+    restart: "no"
 
   vault:
     image: hashicorp/vault:1.15
@@ -113,25 +129,32 @@ services:
       VAULT_DEV_ROOT_TOKEN_ID: 'dev-token'
       VAULT_DEV_LISTEN_ADDRESS: '0.0.0.0:8200'
       KUBERNETES_API_HOST: vault-auth-control-plane
-    command: server -dev
+    command: |
+      sh -c '
+        # Start Vault in dev mode and wait for it to be ready
+        vault server -dev &
+        
+        # Wait for Vault to start
+        until vault status; do
+          echo "Waiting for Vault to start..."
+          sleep 1
+        done
+        
+        # Keep the container running
+        exec tail -f /dev/null'
     networks:
       - vault_internal
       - init_network
       - kind
     healthcheck:
-      test: ["CMD", "vault", "status", "-address=http://0.0.0.0:8200"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "vault", "status"]
+      interval: 5s
+      timeout: 2s
       retries: 3
-      start_period: 5s
+      start_period: 2s
     volumes:
       - vault-data:/vault/file
       - k8s-config:/k8s-config:ro
-    depends_on:
-      clear-logs:
-        condition: service_completed_successfully
-      k8s-init:
-        condition: service_completed_successfully
     restart: on-failure
 
   vault-config:
@@ -168,14 +191,6 @@ services:
         echo "[$(date "+%Y-%m-%d %H:%M:%S")] Starting Vault configuration process"
         echo "----------------------------------------"
         
-        # Wait for Vault to be ready
-        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Waiting for Vault to be ready..."
-        until curl -fs http://vault:8200/v1/sys/health; do
-          echo "[$(date "+%Y-%m-%d %H:%M:%S")] Vault not ready, retrying in 5 seconds..."
-          sleep 5
-        done
-        echo "[$(date "+%Y-%m-%d %H:%M:%S")] Vault is ready"
-        
         # Run setup scripts
         echo "[$(date "+%Y-%m-%d %H:%M:%S")] Running setup-k8s-auth.sh..."
         /app/scripts/setup-k8s-auth.sh
@@ -208,12 +223,12 @@ services:
       - REDIS_SERVICE_NAME_FILE=/run/secrets/redis_service_name
       - REDIS_HOST_FILE=/run/secrets/redis_host
       - REDIS_PORT_FILE=/run/secrets/redis_port
+      - REDIS_PASSWORD_FILE=/run/secrets/redis_password
       - FLASK_SERVICE_NAME_FILE=/run/secrets/flask_service_name
       - FLASK_PORT_FILE=/run/secrets/flask_port
       - APP_SECRET_KEY_FILE=/run/secrets/app_secret_key
       - JWT_SECRET_KEY_FILE=/run/secrets/jwt_secret_key
       - ENCRYPTION_KEY_FILE=/run/secrets/encryption_key
-      - REDIS_PASSWORD_FILE=/run/secrets/redis_password
       - STRIPE_SECRET_KEY_FILE=/run/secrets/stripe_secret_key
     volumes:
       - ./plugins:/app/plugins
@@ -231,14 +246,19 @@ services:
       - redis_service_name
       - redis_host
       - redis_port
+      - redis_password
       - flask_service_name
       - flask_port
       - pythonpath
       - app_secret_key
       - jwt_secret_key
       - encryption_key
-      - redis_password
       - stripe_secret_key
+    networks:
+      - vault_internal
+      - cr_credit_system_network
+      - kind
+      - database_internal
     depends_on:
       vault-config:
         condition: service_completed_successfully
@@ -246,17 +266,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      vault:
-        condition: service_healthy
-    networks:
-      - vault_internal
-      - cr_credit_system_network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
     command: |
       sh -c '
         echo "Waiting for Vault to be ready..."
@@ -283,58 +292,31 @@ services:
     container_name: mongodb
     restart: always
     command: ["mongod", "--bind_ip_all"]
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: rootpassword
-      MONGO_INITDB_DATABASE: admin
     volumes:
       - cr_credit_system_mongodb_data:/data/db
-      - ./secrets:/run/secrets:ro
-    secrets:
-      - mongodb_root_user
-      - mongodb_root_password
-      - mongodb_db_name
-    ports:
-      - "27017:27017"
     networks:
-      - cr_credit_system_network
+      - database_internal
     healthcheck:
-      test: ["CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')"]
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 40s
 
   redis:
     image: redis:alpine
     container_name: redis
     restart: always
-    command: |
-      sh -c '
-        REDIS_PASSWORD=$(cat /run/secrets/redis_password)
-        redis-server --requirepass "$REDIS_PASSWORD"
-      '
     volumes:
       - cr_credit_system_redis_data:/data
-      - ./secrets:/run/secrets:ro
-    secrets:
-      - redis_password
-      - redis_service_name
-      - redis_host
-      - redis_port
-    ports:
-      - "6379:6379"
     networks:
-      - cr_credit_system_network
+      - database_internal
     healthcheck:
-      test: |
-        sh -c '
-          REDIS_PASSWORD=$(cat /run/secrets/redis_password)
-          redis-cli -a "$REDIS_PASSWORD" ping
-        '
+      test: redis-cli ping
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   nginx:
     image: nginx:latest
@@ -422,6 +404,9 @@ networks:
   cr_credit_system_network:
     name: cr_credit_system_network
     driver: bridge
+  database_internal:
+    name: cr_credit_system_database_internal
+    internal: true
 
 volumes:
   app_secrets:
